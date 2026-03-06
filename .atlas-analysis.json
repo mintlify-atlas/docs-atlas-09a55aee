@@ -83,6 +83,9 @@
     "GetCards.get_cards()",
     "SingleBuyController.bancard_webhook(**post)",
     "SingleBuyController.bancard_return(**post)",
+    "CatastroController.bancard_webhook_catastro(**post)",
+    "CatastroController.catastros(**kwargs)",
+    "CatastroController.catastros_facturas(**kwargs)",
     "WebsiteSaleSingleBuyCustom._get_shop_payment_values(order, **kwargs)"
   ]
 }

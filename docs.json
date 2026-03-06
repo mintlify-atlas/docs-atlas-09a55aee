@@ -8,10 +8,6 @@
     "dark": "#004799"
   },
   "favicon": "/favicon.svg",
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
   "navbar": {
     "primary": {
       "type": "github",
@@ -69,6 +65,7 @@
             "group": "Controllers",
             "pages": [
               "api/webhook-controller",
+              "api/catastro-controller",
               "api/websitesale-controller"
             ]
           },

@@ -1,0 +1,340 @@
+---
+title: 'Catastro Controller'
+description: 'API reference for CatastroController - handles card registration webhooks and UI pages'
+---
+
+## Overview
+
+The `CatastroController` manages the card registration (catastro) flow, including webhook callbacks from Bancard and user interface pages for card management.
+
+**Source**: `controllers/page.py:9`
+
+---
+
+## Routes
+
+### bancard_webhook_catastro()
+
+Handles webhook callbacks from Bancard after card registration attempts.
+
+**Source**: `controllers/page.py:18`
+
+<ParamField path="**post" type="dict" required>
+  Request parameters from Bancard webhook
+</ParamField>
+
+**Route**: `/payment/bancard/catastro/webhook`
+
+**Methods**: `POST`, `GET`
+
+**Authentication**: `public`
+
+**CSRF**: Disabled
+
+#### POST Request (Server-to-Server)
+
+Bancard sends payment data to this endpoint after card registration processing.
+
+```python
+@http.route(
+    "/payment/bancard/catastro/webhook",
+    type="http",
+    auth="public",
+    csrf=False,
+    methods=["POST", "GET"],
+)
+def bancard_webhook_catastro(self, **post):
+    if request.httprequest.method == "POST":
+        _logger.info("CATASTRO WEBHOOK (POST - servidor a servidor)")
+        _logger.info("CATASTRO: %s", request.httprequest.data)
+        
+        payment_data = request.httprequest.get_json(silent=True) or {}
+        _logger.info(f"Respuesta del catastro de tarjeta: {payment_data}")
+```
+
+**Request Body**: JSON payload from Bancard with card registration results
+
+#### GET Request (User Redirect)
+
+User is redirected to this endpoint after completing card registration in Bancard's interface.
+
+```python
+elif request.httprequest.method == "GET":
+    _logger.info("BANCARD WEBHOOK (GET - retorno del usuario)")
+    _logger.info(f"CATASTRO: {post}")
+    status = post.get("status")
+    
+    if status == "add_new_card_success":
+        _logger.info("Registro Exitoso")
+        return request.redirect("/catastros")
+    elif status == "add_new_card_fail":
+        _logger.info("Fallo el registro de la tarjeta")
+        request.session["payment_message"] = f"{post.get("description")}"
+        request.session["payment_status"] = "error"
+        return request.redirect("/catastros")
+```
+
+**Query Parameters**:
+
+<ParamField path="status" type="str">
+  Card registration status: `add_new_card_success` or `add_new_card_fail`
+</ParamField>
+
+<ParamField path="description" type="str">
+  Error description (when status is `add_new_card_fail`)
+</ParamField>
+
+**Returns**: 
+- On success: Redirect to `/catastros` page
+- On failure: Redirect to `/catastros` with error message in session
+
+---
+
+### catastros()
+
+Renders the card registration form page.
+
+**Source**: `controllers/page.py:43`
+
+<ParamField path="**kwargs" type="dict">
+  Optional request parameters
+</ParamField>
+
+**Route**: `/catastros`
+
+**Method**: `GET`
+
+**Authentication**: `public`
+
+**Template**: `bancard.catastro_form`
+
+```python
+@http.route("/catastros", type="http", auth="public", website=True)
+def catastros(self, **kwargs):
+    provider = request.env["payment.provider"].search(
+        [("code", "=", "bancard")], limit=1
+    )
+    
+    # Mensajes desde la sesión (del webhook)
+    payment_message = request.session.pop("payment_message", False)
+    payment_status = request.session.pop("payment_status", False)
+    
+    return request.render(
+        "bancard.catastro_form",
+        {
+            "shop_process_id_catastro": provider.new_cards(request.env.user.id),
+            "payment_message": payment_message,
+            "payment_status": payment_status,
+        },
+    )
+```
+
+**Template Variables**:
+
+<ResponseField name="shop_process_id_catastro" type="str">
+  Process ID for the card registration transaction
+</ResponseField>
+
+<ResponseField name="payment_message" type="str">
+  Error or success message from previous webhook callback
+</ResponseField>
+
+<ResponseField name="payment_status" type="str">
+  Status of previous operation: `error`, `warning`, or `success`
+</ResponseField>
+
+**Flow**:
+1. Retrieves Bancard payment provider
+2. Generates new card registration process ID via `provider.new_cards()`
+3. Retrieves any messages from session (set by webhook)
+4. Renders card registration form with Bancard iframe
+
+---
+
+### catastros_facturas()
+
+Displays user's stored payment cards and synchronizes with Bancard.
+
+**Source**: `controllers/page.py:65`
+
+<ParamField path="**kwargs" type="dict">
+  Optional request parameters
+</ParamField>
+
+**Route**: `/catastros/facturas`
+
+**Method**: `GET`
+
+**Authentication**: `user` (requires login)
+
+**Template**: `bancard.catastros_facturas`
+
+```python
+@http.route("/catastros/facturas", type="http", auth="user", website=True)
+def catastros_facturas(self, **kwargs):
+    provider = request.env["payment.provider"].search(
+        [("code", "=", "bancard")], limit=1
+    )
+    
+    # Obtener tarjetas desde Bancard
+    data = provider.get_cards(request.env.user.id)
+    _logger.info(f"Obtenemos las tarjetas del usuario: {data}")
+    
+    # Sincronizar tarjetas en el modelo
+    CardModel = request.env["bancard.user.card"].sudo()
+    user_id = request.env.user.id
+    
+    for card in data:
+        existing = CardModel.search(
+            [
+                ("alias_token", "=", card["alias_token"]),
+                ("user_id", "=", user_id),
+            ],
+            limit=1,
+        )
+        
+        vals = {
+            "user_id": user_id,
+            "alias_token": card.get("alias_token"),
+            "card_masked_number": card.get("card_masked_number"),
+            "expiration_date": card.get("expiration_date"),
+            "card_brand": card.get("card_brand"),
+            "card_id_bancard": card.get("card_id"),
+            "card_type": card.get("card_type"),
+            "bancard_proccesed": card.get("bancard_proccesed", False),
+        }
+        
+        if existing:
+            existing.write(vals)
+        else:
+            CardModel.create(vals)
+    
+    # Listar tarjetas guardadas del usuario
+    user_cards = CardModel.search([("user_id", "=", user_id)])
+    
+    return request.render(
+        "bancard.catastros_facturas",
+        {
+            "user_cards": user_cards,
+        },
+    )
+```
+
+**Template Variables**:
+
+<ResponseField name="user_cards" type="recordset">
+  List of `bancard.user.card` records for the authenticated user
+</ResponseField>
+
+**Functionality**:
+1. Fetches user's cards from Bancard API via `provider.get_cards()`
+2. Synchronizes card data with local `bancard.user.card` model
+3. Updates existing cards or creates new records
+4. Renders template with user's stored cards
+
+**Card Synchronization Fields**:
+- `user_id` - Current user ID
+- `alias_token` - Card token from Bancard
+- `card_masked_number` - Masked card number (e.g., `************1234`)
+- `expiration_date` - Card expiration date
+- `card_brand` - Card brand (VISA, Mastercard, etc.)
+- `card_id_bancard` - Bancard's internal card ID
+- `card_type` - Type of card
+- `bancard_proccesed` - Whether card has been processed
+
+---
+
+## Usage Example
+
+### Card Registration Flow
+
+```python
+# User visits /catastros page
+# 1. catastros() generates a process ID
+# 2. User completes registration in Bancard iframe
+# 3. Bancard calls bancard_webhook_catastro() with results
+# 4. User is redirected back to /catastros with success/failure message
+```
+
+### Viewing Stored Cards
+
+```python
+# User visits /catastros/facturas (requires authentication)
+# 1. catastros_facturas() fetches cards from Bancard
+# 2. Synchronizes cards with local database
+# 3. Displays list of user's stored cards
+```
+
+---
+
+## Security Considerations
+
+<Warning>
+The card registration webhook endpoint is public (no authentication required) to allow Bancard to send callbacks. Ensure proper validation of webhook data in production.
+</Warning>
+
+### Session Management
+
+The controller uses session storage to pass messages between webhook and UI:
+
+```python
+request.session["payment_message"] = "Error message"
+request.session["payment_status"] = "error"
+```
+
+### Authentication Requirements
+
+- `/catastros` - Public (anyone can register cards)
+- `/catastros/facturas` - Requires authentication (`auth="user"`)
+- Webhook endpoint - Public (for Bancard callbacks)
+
+---
+
+## Integration with Other Components
+
+### PaymentProvider
+
+Uses `provider.new_cards()` and `provider.get_cards()` methods:
+
+```python
+provider = request.env["payment.provider"].search(
+    [("code", "=", "bancard")], limit=1
+)
+shop_process_id = provider.new_cards(request.env.user.id)
+cards = provider.get_cards(request.env.user.id)
+```
+
+### BancardUserCard Model
+
+Synchronizes card data with the `bancard.user.card` model:
+
+```python
+CardModel = request.env["bancard.user.card"].sudo()
+CardModel.create(vals)  # Create new card
+existing.write(vals)     # Update existing card
+```
+
+### Templates
+
+Renders two templates:
+- `bancard.catastro_form` - Card registration form with iframe
+- `bancard.catastros_facturas` - List of user's cards
+
+---
+
+## Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Webhook Controller" icon="webhook" href="/api/webhook-controller">
+    Payment transaction webhooks
+  </Card>
+  <Card title="Payment Provider" icon="credit-card" href="/api/payment-provider">
+    Core payment methods
+  </Card>
+  <Card title="User Card Model" icon="wallet" href="/api/user-card">
+    Card storage model
+  </Card>
+  <Card title="Card Methods" icon="key" href="/api/card-methods">
+    NewCards and GetCards classes
+  </Card>
+</CardGroup>
