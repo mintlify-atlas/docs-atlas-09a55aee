@@ -1,0 +1,88 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Bancard Payment Gateway for Odoo",
+  "projectDescription": "Odoo module for integrating Bancard/vPos payment gateway for e-commerce in Paraguay",
+  "theme": "mint",
+  "primaryColor": "#0066CC",
+  "lightColor": "#4D94FF",
+  "darkColor": "#004799",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/payment-flow",
+              "concepts/single-buy",
+              "concepts/card-management"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/setup-provider",
+              "guides/webhooks",
+              "guides/testing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Payment Provider",
+            "pages": [
+              "api/payment-provider",
+              "api/single-buy-method",
+              "api/card-methods"
+            ]
+          },
+          {
+            "group": "Controllers",
+            "pages": [
+              "api/webhook-controller",
+              "api/websitesale-controller"
+            ]
+          },
+          {
+            "group": "Models",
+            "pages": [
+              "api/sale-order",
+              "api/user-card"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Single Buy payment processing with Bancard vPos",
+    "Secure card tokenization and management",
+    "Webhook handling for payment confirmation",
+    "Seamless integration with Odoo e-commerce",
+    "Support for Paraguayan Guaraní (PYG) currency",
+    "Production and staging environment support"
+  ],
+  "publicApiSurface": [
+    "PaymentProvider.single_buy(monto, descripcion)",
+    "PaymentProvider.new_cards(user_id)",
+    "PaymentProvider.get_cards(user_id)",
+    "MethodSingleBuy.single_buy()",
+    "NewCards.new_cards()",
+    "GetCards.get_cards()",
+    "SingleBuyController.bancard_webhook(**post)",
+    "SingleBuyController.bancard_return(**post)",
+    "WebsiteSaleSingleBuyCustom._get_shop_payment_values(order, **kwargs)"
+  ]
+}
