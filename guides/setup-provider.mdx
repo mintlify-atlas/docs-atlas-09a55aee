@@ -1,0 +1,238 @@
+---
+title: 'Setup Payment Provider'
+description: 'Step-by-step guide to configure Bancard payment provider in Odoo'
+---
+
+## Overview
+
+This guide walks you through setting up the Bancard payment provider in your Odoo instance. The provider integrates with Bancard's vPOS API to process payments for your e-commerce store.
+
+<Steps>
+
+### Step 1: Access Payment Provider Settings
+
+Navigate to the payment provider configuration in Odoo:
+
+1. Go to **Website** → **Configuration** → **Payment Providers**
+2. Click **Create** to add a new payment provider
+3. Select **Bancard** from the provider dropdown
+
+<Info>
+The Bancard provider is automatically available after installing the `payment_bancard` module.
+</Info>
+
+### Step 2: Configure Basic Information
+
+Set up the basic provider details:
+
+- **Name**: Enter a display name (e.g., "Bancard Payment Gateway")
+- **State**: Choose your initial state:
+  - **Disabled**: Provider is hidden from customers
+  - **Enabled**: Provider is visible and active
+  - **Test Mode**: Use for testing without processing real transactions
+
+### Step 3: Enter API Credentials
+
+Bancard requires two keys to authenticate API requests:
+
+<CodeGroup>
+
+```python Payment Provider Fields
+class PaymentProvider(models.Model):
+    _inherit = "payment.provider"
+
+    code = fields.Selection(
+        selection_add=[('bancard', 'Bancard')],
+        ondelete={'bancard': 'set default'},
+    )
+
+    clave_publica = fields.Char(
+        string="Pública",
+        required_if_provider="bancard",
+        groups="base.group_system"
+    )
+
+    clave_private = fields.Char(
+        string="Privada",
+        required_if_provider="bancard",
+        groups="base.group_system"
+    )
+```
+
+</CodeGroup>
+
+In the Odoo interface:
+
+1. **Pública (Public Key)**: Enter your Bancard public key
+2. **Privada (Private Key)**: Enter your Bancard private key
+
+<Warning>
+Keep your private key secure! Only users in the `base.group_system` group can view these credentials.
+</Warning>
+
+### Step 4: Select Environment
+
+Choose the appropriate Bancard API environment:
+
+<CodeGroup>
+
+```python Environment Configuration
+environment = fields.Selection(
+    [
+        ('https://vpos.infonet.com.py', 'Produccion'),
+        ('https://vpos.infonet.com.py:8888', 'Staging'),
+    ],
+    default='https://vpos.infonet.com.py:8888',
+)
+```
+
+</CodeGroup>
+
+- **Staging** (`https://vpos.infonet.com.py:8888`): For testing and development
+- **Producción** (`https://vpos.infonet.com.py`): For live transactions
+
+<Tip>
+Always start with the **Staging** environment to test your integration before going live.
+</Tip>
+
+### Step 5: Configure Currency Support
+
+Bancard only supports Paraguayan Guaraníes (PYG). The module automatically restricts currency support:
+
+```python Currency Validation
+def _get_supported_currencies(self):
+    """Override: Bancard solo soporta PYG."""
+    supported_currencies = super()._get_supported_currencies()
+    if self.code in ['bancard', 'catastro']:
+        supported_currencies = supported_currencies.filtered(
+            lambda c: c.name == 'PYG'
+        )
+    return supported_currencies
+```
+
+Ensure your Odoo instance has PYG currency enabled:
+
+1. Go to **Settings** → **Accounting** → **Currencies**
+2. Activate **PYG** if not already active
+
+### Step 6: Verify Webhook URLs
+
+The provider automatically configures webhook URLs based on your Odoo instance's base URL:
+
+```python Webhook URL Configuration
+# Return URL (successful payment)
+return_url = urls.url_join(self.base_url, '/payment/bancard/webhook')
+
+# Cancel URL (cancelled payment)
+cancel_url = urls.url_join(self.base_url, '/payment/bancard/return')
+```
+
+These URLs are:
+- **Return URL**: `https://your-domain.com/payment/bancard/webhook`
+- **Cancel URL**: `https://your-domain.com/payment/bancard/return`
+
+<Info>
+Webhook URLs are automatically generated. You don't need to configure them manually in Odoo, but you may need to whitelist them in your Bancard dashboard.
+</Info>
+
+### Step 7: Test the Connection
+
+Verify your configuration by initiating a test payment:
+
+```python Single Buy Method
+def single_buy(self, monto, descripcion):
+    self.ensure_one()
+
+    if not all([self.clave_publica, self.clave_private]):
+        raise ValidationError(
+            _("El proveedor de pago Bancard no está configurado correctamente.")
+        )
+
+    shop_process_id = self.env['ir.sequence'].next_by_code('bancard.shop.process')
+    method_single_buy = MethodSingleBuy(
+        monto,
+        descripcion,
+        self.clave_publica,
+        self.clave_private,
+        self.get_base_url(),
+        shop_process_id,
+    )
+    payload = method_single_buy.single_buy()
+
+    response = self._bancard_make_request(payload, '/vpos/api/0.3/single_buy')
+    return response.get('process_id'), shop_process_id
+```
+
+1. Add a product to your cart
+2. Proceed to checkout
+3. Select Bancard as the payment method
+4. Complete a test transaction
+
+</Steps>
+
+## Configuration Checklist
+
+Before going live, ensure:
+
+- [ ] Public and private keys are correctly entered
+- [ ] Environment is set to **Staging** for testing
+- [ ] PYG currency is active in your Odoo instance
+- [ ] Test transactions complete successfully
+- [ ] Webhooks are receiving notifications (see [Webhooks Guide](/guides/webhooks))
+- [ ] Switch to **Producción** environment for live transactions
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="ValidationError: El proveedor de pago Bancard no está configurado correctamente">
+
+This error occurs when credentials are missing:
+
+```python
+if not all([self.clave_publica, self.clave_private]):
+    raise ValidationError(
+        _("El proveedor de pago Bancard no está configurado correctamente.")
+    )
+```
+
+**Solution**: Verify both public and private keys are entered in the provider configuration.
+
+</Accordion>
+
+<Accordion title="Currency not supported error">
+
+Bancard only accepts PYG currency.
+
+**Solution**: 
+1. Enable PYG currency in Odoo
+2. Set your product prices in PYG
+3. Ensure customer orders use PYG
+
+</Accordion>
+
+<Accordion title="Connection timeout or API errors">
+
+Check your environment URL is correct:
+- Staging: `https://vpos.infonet.com.py:8888`
+- Production: `https://vpos.infonet.com.py`
+
+**Solution**: Verify network connectivity and ensure your server can reach Bancard's API endpoints.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Configure Webhooks" icon="webhook" href="/guides/webhooks">
+  Learn how to handle payment notifications and return URLs
+</Card>
+
+<Card title="Testing Guide" icon="vial" href="/guides/testing">
+  Test your integration with staging credentials
+</Card>
+
+</CardGroup>

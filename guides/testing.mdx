@@ -1,0 +1,553 @@
+---
+title: 'Testing Guide'
+description: 'Test your Bancard integration in staging environment'
+---
+
+## Overview
+
+Before processing live payments, thoroughly test your Bancard integration using the staging environment. This guide covers testing strategies, sample transactions, and troubleshooting common issues.
+
+## Environment Configuration
+
+### Staging Environment
+
+The module defaults to staging for testing:
+
+```python models/payment_provider.py
+environment = fields.Selection(
+    [
+        ('https://vpos.infonet.com.py', 'Produccion'),
+        ('https://vpos.infonet.com.py:8888', 'Staging'),
+    ],
+    default='https://vpos.infonet.com.py:8888',
+)
+```
+
+<Warning>
+Never test with production credentials. Always use staging API keys provided by Bancard.
+</Warning>
+
+### Configure Staging Provider
+
+<Steps>
+
+### Step 1: Create Test Provider
+
+1. Go to **Website** → **Configuration** → **Payment Providers**
+2. Create a new Bancard provider
+3. Name it "Bancard Staging" for clarity
+
+### Step 2: Enter Test Credentials
+
+Use your Bancard staging credentials:
+- **Pública**: Your staging public key
+- **Privada**: Your staging private key
+- **Environment**: Select **Staging** (`https://vpos.infonet.com.py:8888`)
+
+### Step 3: Enable Test Mode
+
+Set the provider state to **Test Mode** or **Enabled** for staging.
+
+</Steps>
+
+## Testing Payment Flow
+
+### Complete Transaction Test
+
+Follow these steps to test the entire payment flow:
+
+<Steps>
+
+### Step 1: Create Test Order
+
+1. Add a product to your cart (ensure price is in PYG)
+2. Proceed to checkout
+3. Fill in customer information
+4. Select Bancard as payment method
+
+### Step 2: Verify Request Creation
+
+Check Odoo logs for single_buy request:
+
+```python models/payment_provider.py
+def single_buy(self, monto, descripcion):
+    self.ensure_one()
+
+    if not all([self.clave_publica, self.clave_private]):
+        raise ValidationError(
+            _("El proveedor de pago Bancard no está configurado correctamente.")
+        )
+
+    shop_process_id = self.env['ir.sequence'].next_by_code('bancard.shop.process')
+    method_single_buy = MethodSingleBuy(
+        monto,
+        descripcion,
+        self.clave_publica,
+        self.clave_private,
+        self.get_base_url(),
+        shop_process_id,
+    )
+    payload = method_single_buy.single_buy()
+    response = self._bancard_make_request(payload, '/vpos/api/0.3/single_buy')
+    _logger.info(f"QUE ME DEVUELVE EN EL RESPONSE:{response}")
+    return response.get('process_id'), shop_process_id
+```
+
+Verify logs show:
+- Generated `shop_process_id`
+- Created MD5 token
+- API response with `process_id`
+
+### Step 3: Complete Payment
+
+On Bancard's staging page:
+1. Enter test card details (provided by Bancard)
+2. Submit payment
+3. Wait for redirect
+
+### Step 4: Verify Webhooks
+
+Check that both webhooks fire:
+
+**POST Webhook** (server-to-server):
+```python controllers/main.py
+if request.httprequest.method == "POST":
+    _logger.info("BANCARD WEBHOOK (POST - servidor a servidor)")
+    _logger.info("RAW: %s", request.httprequest.data)
+
+    payment_data = request.httprequest.get_json(silent=True) or {}
+    _logger.info(f"PAYMENT_DATA: {payment_data}")
+```
+
+**GET Webhook** (user redirect):
+```python
+elif request.httprequest.method == "GET":
+    _logger.info("BANCARD WEBHOOK (GET - retorno del usuario)")
+    _logger.info(f"GET PARAMS: {post}")
+```
+
+### Step 5: Verify Order Confirmation
+
+Check that:
+- Payment transaction created with `state='done'`
+- Sale order confirmed (state changed to 'sale')
+- Customer redirected to confirmation page
+
+```python controllers/main.py
+if sale_order.state in ('draft', 'sent'):
+    sale_order.write({'shop_process_id': shop_process_id})
+    sale_order.action_confirm()
+    _logger.info(f"✅ Orden confirmada: {sale_order.name}")
+```
+
+</Steps>
+
+## Test Scenarios
+
+### Successful Payment
+
+<Card title="Test Case: Approved Transaction" icon="check">
+
+**Setup**:
+- Use valid test card from Bancard
+- Order amount in PYG
+- Valid shop_process_id
+
+**Expected Results**:
+- POST webhook receives `"response_description": "Transaccion aprobada"`
+- Payment transaction created and set to done
+- Sale order confirmed
+- GET webhook redirects to `/shop/confirmation`
+- Shopping cart cleared
+
+**Verification**:
+```python
+tx_sudo._set_done()
+
+if sale_order.state in ('draft', 'sent'):
+    sale_order.action_confirm()
+    _logger.info(f"✅ Orden confirmada: {sale_order.name}")
+
+request.env.cr.commit()
+return request.make_response("OK", status=200)
+```
+
+</Card>
+
+### Failed Payment
+
+<Card title="Test Case: Declined Transaction" icon="xmark">
+
+**Setup**:
+- Use test card that triggers decline (if available)
+- Or enter invalid card details
+
+**Expected Results**:
+- POST webhook receives `"response_description": "Transaccion denegada"`
+- Error message stored in session
+- GET webhook redirects to `/shop/payment`
+- Customer sees error message
+- Shopping cart preserved
+
+**Verification**:
+```python
+elif description_payment == "Transaccion denegada":
+    request.session["payment_message"] = (
+        f"{operation.get('extended_response_description')}"
+    )
+    request.session["payment_status"] = "error"
+```
+
+</Card>
+
+### Cancelled Payment
+
+<Card title="Test Case: User Cancellation" icon="ban">
+
+**Setup**:
+- Start payment process
+- Click "Cancel" or "Back" on Bancard page
+
+**Expected Results**:
+- User redirected to `/payment/bancard/return`
+- Then redirected to `/shop/cart`
+- Shopping cart preserved
+- No transaction created
+
+**Verification**:
+```python controllers/main.py
+@http.route(
+    "/payment/bancard/return",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["GET", "POST"],
+)
+def bancard_return(self, **post):
+    """Usuario canceló el pago"""
+    _logger.info("🔴 BANCARD: Usuario canceló el pago")
+    return request.redirect("/shop/cart")
+```
+
+</Card>
+
+## Testing Checklist
+
+Use this checklist to verify your integration:
+
+### Pre-Payment
+
+- [ ] Staging environment selected
+- [ ] Test credentials configured
+- [ ] PYG currency active
+- [ ] Products priced in PYG
+- [ ] Payment provider enabled
+
+### During Payment
+
+- [ ] Customer can select Bancard provider
+- [ ] Redirect to Bancard staging occurs
+- [ ] Test card details accepted
+- [ ] Payment form displays correctly
+
+### Post-Payment Success
+
+- [ ] POST webhook received and logged
+- [ ] Payment data correctly parsed
+- [ ] `shop_process_id` matches sale order
+- [ ] Payment transaction created
+- [ ] Transaction state set to 'done'
+- [ ] Sale order confirmed
+- [ ] GET webhook redirects to confirmation
+- [ ] Shopping cart cleared
+- [ ] Customer sees confirmation page
+
+### Post-Payment Failure
+
+- [ ] POST webhook received (if sent)
+- [ ] Error message extracted
+- [ ] GET webhook redirects to payment page
+- [ ] Error displayed to customer
+- [ ] Shopping cart preserved
+- [ ] No transaction created or marked failed
+
+### Cancellation
+
+- [ ] Cancel URL called
+- [ ] Redirect to shopping cart
+- [ ] Cart contents preserved
+- [ ] No transaction created
+
+## Debug Logging
+
+### Enable Detailed Logging
+
+The module includes extensive logging throughout:
+
+```python
+_logger = logging.getLogger(__name__)
+
+# Payment initiation
+_logger.info(f"PROCESS_ID DE BANCARD: {order.process_id} - {order.shop_process_id}")
+
+# API response
+_logger.info(f"QUE ME DEVUELVE EN EL RESPONSE:{response}")
+
+# Webhook received
+_logger.info("BANCARD WEBHOOK (POST - servidor a servidor)")
+_logger.info("RAW: %s", request.httprequest.data)
+_logger.info(f"PAYMENT_DATA: {payment_data}")
+
+# Order confirmation
+_logger.info(f"✅ Orden confirmada: {sale_order.name}")
+_logger.info(f"✅ WEBHOOK POST procesado - TX: {tx_sudo.state}")
+```
+
+### View Logs in Odoo
+
+1. Enable **Developer Mode**: Settings → Activate Developer Mode
+2. Go to **Settings** → **Technical** → **Logging**
+3. Search for logs containing "BANCARD"
+
+### Log File Location
+
+Odoo logs are typically at:
+```bash
+/var/log/odoo/odoo-server.log
+```
+
+Tail logs in real-time:
+```bash
+tail -f /var/log/odoo/odoo-server.log | grep -i bancard
+```
+
+## Common Testing Issues
+
+<AccordionGroup>
+
+<Accordion title="ValidationError when initiating payment">
+
+**Error Message**:
+```
+ValidationError: El proveedor de pago Bancard no está configurado correctamente.
+```
+
+**Cause**: Missing credentials
+
+**Solution**:
+```python
+if not all([self.clave_publica, self.clave_private]):
+    raise ValidationError(
+        _("El proveedor de pago Bancard no está configurado correctamente.")
+    )
+```
+
+Verify both public and private keys are set in provider configuration.
+
+</Accordion>
+
+<Accordion title="POST webhook never received">
+
+**Symptoms**: 
+- GET webhook works
+- Order not confirmed
+- No POST log entries
+
+**Causes**:
+1. Firewall blocking Bancard's servers
+2. Incorrect base URL
+3. SSL certificate issues
+
+**Solutions**:
+1. Check firewall allows incoming from Bancard IPs
+2. Verify `web.base.url` parameter:
+   ```bash
+   Settings → Technical → Parameters → System Parameters
+   Key: web.base.url
+   Value: https://your-domain.com
+   ```
+3. Test webhook manually:
+   ```bash
+   curl -X POST https://your-domain.com/payment/bancard/webhook \
+     -H "Content-Type: application/json" \
+     -d '{
+       "operation": {
+         "shop_process_id": 123,
+         "response_description": "Transaccion aprobada"
+       }
+     }'
+   ```
+
+</Accordion>
+
+<Accordion title="Currency mismatch errors">
+
+**Error**: Payment amount or currency rejected
+
+**Cause**: Bancard only supports PYG
+
+**Solution**:
+```python
+def _get_supported_currencies(self):
+    """Override: Bancard solo soporta PYG."""
+    supported_currencies = super()._get_supported_currencies()
+    if self.code in ['bancard', 'catastro']:
+        supported_currencies = supported_currencies.filtered(
+            lambda c: c.name == 'PYG'
+        )
+    return supported_currencies
+```
+
+Ensure:
+1. PYG currency is active
+2. Products priced in PYG
+3. Sale order currency is PYG
+
+</Accordion>
+
+<Accordion title="Token generation fails">
+
+**Symptoms**: API returns authentication error
+
+**Cause**: Incorrect token generation
+
+**Debug**:
+```python models/method_single_buy.py
+def generate_md5_single_buy(self, private_key, shop_process_id, amount, currency):
+    # Concatenar los valores
+    concatenated = f"{private_key}{shop_process_id}{amount}{currency}"
+    # Generar el hash MD5
+    token = hashlib.md5(concatenated.encode()).hexdigest()
+    _logger.info(f"GENERO EL TOKEN SINGLE BUY: {token}")
+    return token
+```
+
+Verify:
+- Private key is correct
+- Amount formatted as `"150000.00"` (2 decimals)
+- Currency is exactly `"PYG"`
+- shop_process_id is integer
+
+</Accordion>
+
+<Accordion title="Sale order not found in webhook">
+
+**Error**: Webhook receives data but can't find sale order
+
+**Cause**: shop_process_id mismatch
+
+**Debug**:
+```python
+shop_process_id = operation.get("shop_process_id")
+_logger.info(f"Looking for order with shop_process_id: {shop_process_id}")
+
+sale_order = (
+    request.env["sale.order"]
+    .sudo()
+    .search([('shop_process_id', '=', shop_process_id)], limit=1)
+)
+
+if not sale_order:
+    _logger.error(f"Order not found for shop_process_id: {shop_process_id}")
+```
+
+Verify:
+- shop_process_id saved to order before API call
+- Sequence `'bancard.shop.process'` exists and works
+- Database committed after writing shop_process_id
+
+</Accordion>
+
+</AccordionGroup>
+
+## Manual Testing with curl
+
+### Test POST Webhook
+
+```bash
+curl -X POST http://localhost:8069/payment/bancard/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operation": {
+      "shop_process_id": 1,
+      "response_description": "Transaccion aprobada",
+      "extended_response_description": "Aprobada",
+      "amount": "150000.00",
+      "currency": "PYG",
+      "authorization_number": "123456",
+      "response_code": "00"
+    }
+  }'
+```
+
+### Test GET Webhook Success
+
+```bash
+curl http://localhost:8069/payment/bancard/webhook?status=payment_success
+```
+
+### Test GET Webhook Failure
+
+```bash
+curl http://localhost:8069/payment/bancard/webhook?status=payment_fail
+```
+
+### Test Cancel URL
+
+```bash
+curl http://localhost:8069/payment/bancard/return
+```
+
+## Moving to Production
+
+Once staging tests pass:
+
+<Steps>
+
+### Step 1: Get Production Credentials
+
+Contact Bancard to receive:
+- Production public key
+- Production private key
+
+### Step 2: Update Provider
+
+1. Go to payment provider configuration
+2. Update **Pública** and **Privada** with production keys
+3. Change **Environment** to **Producción** (`https://vpos.infonet.com.py`)
+
+### Step 3: Verify Settings
+
+- [ ] Production credentials entered
+- [ ] Environment set to Producción
+- [ ] Provider state set to **Enabled**
+- [ ] Test mode disabled
+
+### Step 4: Monitor First Transactions
+
+Closely monitor the first few production transactions:
+- Check logs for any errors
+- Verify webhooks fire correctly
+- Confirm orders are confirmed
+- Ensure customers reach confirmation page
+
+</Steps>
+
+<Warning>
+Test thoroughly in staging before switching to production. Production transactions process real money and cannot be reversed easily.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Webhook Guide" icon="webhook" href="/guides/webhooks">
+  Deep dive into webhook implementation
+</Card>
+
+<Card title="Setup Provider" icon="gear" href="/guides/setup-provider">
+  Review provider configuration
+</Card>
+
+</CardGroup>

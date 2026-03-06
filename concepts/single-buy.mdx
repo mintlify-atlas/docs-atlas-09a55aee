@@ -1,0 +1,429 @@
+---
+title: Single Buy Payment
+description: Learn how to implement one-time payments using Bancard's Single Buy method
+---
+
+Single Buy is Bancard's primary payment method for one-time transactions. It allows customers to make immediate payments without requiring card tokenization or storage.
+
+## What is Single Buy?
+
+Single Buy is a hosted payment flow where:
+
+- Customers are redirected to Bancard's secure payment interface
+- Card details are entered directly on Bancard's servers
+- No sensitive card data touches your server
+- Payment confirmation is handled via webhooks
+- Only PYG (Paraguayan Guaraní) currency is supported
+
+<Info>
+Single Buy is ideal for e-commerce checkout flows where customers make one-time purchases without needing to save their payment information.
+</Info>
+
+## Implementation
+
+### MethodSingleBuy Class
+
+The `MethodSingleBuy` class handles the construction of Single Buy payment requests:
+
+```python
+class MethodSingleBuy:
+    def __init__(
+        self,
+        monto,
+        descripcion,
+        clave_publica,
+        clave_private,
+        base_url,
+        shop_process_id,
+    ):
+        self.monto = monto
+        self.descripcion = descripcion
+        self.clave_publica = clave_publica
+        self.clave_private = clave_private
+        self.base_url = base_url
+        self.shop_process_id = shop_process_id
+```
+
+**Location:** `models/method_single_buy.py:8-23`
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `monto` | Float | Transaction amount in PYG |
+| `descripcion` | String | Payment description |
+| `clave_publica` | String | Bancard public key |
+| `clave_private` | String | Bancard private key (for token generation) |
+| `base_url` | String | Your application's base URL |
+| `shop_process_id` | Integer | Unique transaction identifier |
+
+## Generating the Payload
+
+The `single_buy()` method constructs the API request payload:
+
+```python
+def single_buy(self):
+    formatted_amount = f"{self.monto:.2f}"
+    payload = {
+        "public_key": self.clave_publica,
+        "operation": {
+            "token": self.generate_md5_single_buy(
+                self.clave_private,
+                int(self.shop_process_id),
+                f"{formatted_amount}",
+                "PYG",
+            ),
+            "shop_process_id": int(self.shop_process_id),
+            "amount": f"{formatted_amount}",
+            "currency": "PYG",
+            "additional_data": "",
+            "description": self.descripcion,
+            "return_url": urls.url_join(self.base_url, "/payment/bancard/webhook"),
+            "cancel_url": urls.url_join(self.base_url, "/payment/bancard/return"),
+        },
+    }
+    return payload
+```
+
+**Location:** `models/method_single_buy.py:25-46`
+
+### Payload Structure
+
+<CodeGroup>
+
+```json Example Request
+{
+  "public_key": "XXXXXXXXXXXXXXXXXXXXXX",
+  "operation": {
+    "token": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+    "shop_process_id": 12345,
+    "amount": "150000.00",
+    "currency": "PYG",
+    "additional_data": "",
+    "description": "Order SO001",
+    "return_url": "https://yoursite.com/payment/bancard/webhook",
+    "cancel_url": "https://yoursite.com/payment/bancard/return"
+  }
+}
+```
+
+```json Example Response
+{
+  "status": "success",
+  "process_id": "abc123def456",
+  "messages": []
+}
+```
+
+</CodeGroup>
+
+## Token Generation
+
+The security token is generated using MD5 hashing to ensure request authenticity:
+
+```python
+def generate_md5_single_buy(self, private_key, shop_process_id, amount, currency):
+    # Concatenar los valores
+    concatenated = f"{private_key}{shop_process_id}{amount}{currency}"
+    
+    # Generar el hash MD5
+    token = hashlib.md5(concatenated.encode()).hexdigest()
+    _logger.info(f"GENERO EL TOKEN SINGLE BUY: {token}")
+    return token
+```
+
+**Location:** `models/method_single_buy.py:48-55`
+
+### Token Components
+
+<Steps>
+
+<Step title="Concatenate Values">
+Combine parameters in this exact order:
+
+```
+private_key + shop_process_id + amount + currency
+```
+
+Example: `MYKEY1234512345.00PYG`
+</Step>
+
+<Step title="Generate MD5 Hash">
+Compute the MD5 hash of the concatenated string:
+
+```python
+import hashlib
+token = hashlib.md5(concatenated.encode()).hexdigest()
+```
+</Step>
+
+<Step title="Include in Payload">
+Add the generated token to the operation object in your API request.
+</Step>
+
+</Steps>
+
+<Warning>
+**Important:** The amount must be formatted with exactly 2 decimal places (e.g., `150000.00`), and the currency must always be `PYG`. Incorrect formatting will cause token validation to fail.
+</Warning>
+
+## Making the API Request
+
+The payment provider sends the payload to Bancard's Single Buy endpoint:
+
+```python
+def single_buy(self, monto, descripcion):
+    self.ensure_one()
+    
+    if not all([self.clave_publica, self.clave_private]):
+        raise ValidationError(
+            _("El proveedor de pago Bancard no está configurado correctamente.")
+        )
+    
+    shop_process_id = self.env["ir.sequence"].next_by_code("bancard.shop.process")
+    
+    method_single_buy = MethodSingleBuy(
+        monto,
+        descripcion,
+        self.clave_publica,
+        self.clave_private,
+        self.get_base_url(),
+        shop_process_id,
+    )
+    payload = method_single_buy.single_buy()
+    
+    response = self._bancard_make_request(payload, "/vpos/api/0.3/single_buy")
+    return response.get("process_id"), shop_process_id
+```
+
+**Location:** `models/payment_provider.py:72-92`
+
+### API Endpoint
+
+- **Staging:** `https://vpos.infonet.com.py:8888/vpos/api/0.3/single_buy`
+- **Production:** `https://vpos.infonet.com.py/vpos/api/0.3/single_buy`
+
+## Integration with Odoo
+
+The Single Buy method is integrated into Odoo's checkout flow:
+
+```python
+class WebsiteSaleSingleBuyCustom(WebsiteSale):
+    def _get_shop_payment_values(self, order, **kwargs):
+        order = request.website.sale_get_order()
+        
+        if order:
+            single = (
+                request.env["payment.provider"]
+                .sudo()
+                .search([("code", "=", "bancard")], limit=1)
+            )
+            
+            process_id, shop_process_id = single.single_buy(
+                order.amount_total, order.name
+            )
+            
+            order.write({
+                "process_id": process_id,
+                "shop_process_id": shop_process_id,
+            })
+            request.env.cr.commit()
+        
+        response = super()._get_shop_payment_values(order, **kwargs)
+        return response
+```
+
+**Location:** `controllers/main.py:156-182`
+
+## Return and Cancel URLs
+
+### Return URL (Webhook)
+
+The `return_url` receives both server-to-server POST notifications and user GET redirects:
+
+```python
+"return_url": urls.url_join(self.base_url, "/payment/bancard/webhook")
+```
+
+This URL handles:
+- **POST:** Payment confirmation from Bancard servers
+- **GET:** User redirect after completing payment
+
+See [Payment Flow](/concepts/payment-flow) for complete webhook implementation details.
+
+### Cancel URL
+
+The `cancel_url` is used when the customer cancels the payment:
+
+```python
+"cancel_url": urls.url_join(self.base_url, "/payment/bancard/return")
+```
+
+Implementation:
+
+```python
+@http.route(
+    "/payment/bancard/return",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["GET", "POST"],
+)
+def bancard_return(self, **post):
+    """Usuario canceló el pago"""
+    _logger.info("🔴 BANCARD: Usuario canceló el pago")
+    return request.redirect("/shop/cart")
+```
+
+**Location:** `controllers/main.py:139-153`
+
+## Currency Support
+
+Bancard Single Buy only supports PYG (Paraguayan Guaraní):
+
+```python
+def _get_supported_currencies(self):
+    """Override: Bancard solo soporta PYG."""
+    supported_currencies = super()._get_supported_currencies()
+    if self.code in ["bancard", "catastro"]:
+        supported_currencies = supported_currencies.filtered(
+            lambda c: c.name == "PYG"
+        )
+    return supported_currencies
+```
+
+**Location:** `models/payment_provider.py:63-70`
+
+<Note>
+If your Odoo instance uses a different default currency, ensure proper currency conversion is implemented before sending amounts to Bancard.
+</Note>
+
+## Complete Flow Example
+
+<Steps>
+
+<Step title="Customer Initiates Checkout">
+Customer proceeds to checkout with a cart total of 150,000 PYG.
+</Step>
+
+<Step title="Generate Shop Process ID">
+System generates unique ID: `12345`
+</Step>
+
+<Step title="Create Token">
+Generate MD5 token:
+```
+Input: MYKEY1234512345.00PYG
+Token: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+```
+</Step>
+
+<Step title="Send Single Buy Request">
+POST to `/vpos/api/0.3/single_buy` with payload.
+
+Receive: `{"process_id": "abc123def456"}`
+</Step>
+
+<Step title="Store IDs on Order">
+Save `process_id` and `shop_process_id` to sale order.
+</Step>
+
+<Step title="Redirect Customer">
+Use `process_id` to display Bancard's payment interface.
+</Step>
+
+<Step title="Customer Completes Payment">
+Customer enters card details and confirms on Bancard's page.
+</Step>
+
+<Step title="Receive Webhook">
+Bancard sends POST to `/payment/bancard/webhook` with result.
+</Step>
+
+<Step title="Confirm Order">
+If approved, create transaction and confirm sale order.
+</Step>
+
+<Step title="Redirect User">
+Customer redirected to confirmation or payment page based on result.
+</Step>
+
+</Steps>
+
+## Error Handling
+
+### Configuration Errors
+
+```python
+if not all([self.clave_publica, self.clave_private]):
+    raise ValidationError(
+        _("El proveedor de pago Bancard no está configurado correctamente.")
+    )
+```
+
+### API Errors
+
+Log all API responses for debugging:
+
+```python
+_logger.info(f"QUE ME DEVUELVE EN EL RESPONSE:{response}")
+```
+
+### Transaction Errors
+
+Handle denied transactions gracefully:
+
+```python
+elif description_payment == "Transaccion denegada":
+    request.session["payment_message"] = (
+        f"{operation.get('extended_response_description')}"
+    )
+    request.session["payment_status"] = "error"
+```
+
+## Security Considerations
+
+<Warning>
+**Never expose your private key:** The private key should only be used server-side for token generation and must never be sent to the client or included in frontend code.
+</Warning>
+
+1. **Token Validation:** Bancard validates the token to ensure request authenticity
+2. **HTTPS Required:** All communication must use HTTPS in production
+3. **Webhook Security:** Validate `shop_process_id` to ensure it belongs to your system
+4. **CSRF Protection:** Webhooks have CSRF disabled (`csrf=False`) as they come from external servers
+
+## Best Practices
+
+<Tip>
+Always format amounts with 2 decimal places using `f"{amount:.2f}"` to ensure consistent token generation.
+</Tip>
+
+1. **Unique Process IDs:** Use Odoo sequences to generate unique `shop_process_id` values
+2. **Idempotency:** Check order state before confirming to prevent duplicate processing
+3. **Logging:** Log all API requests and responses for debugging
+4. **Error Messages:** Provide clear, user-friendly error messages
+5. **Database Commits:** Commit changes before responding to webhooks
+
+## Testing
+
+Use Bancard's staging environment for testing:
+
+```python
+environment = fields.Selection(
+    [
+        ("https://vpos.infonet.com.py", "Produccion"),
+        ("https://vpos.infonet.com.py:8888", "Staging"),
+    ],
+    default="https://vpos.infonet.com.py:8888",
+)
+```
+
+**Location:** `models/payment_provider.py:39-45`
+
+Test scenarios:
+- Successful payment
+- Declined payment
+- User cancellation
+- Network timeout
+- Invalid credentials

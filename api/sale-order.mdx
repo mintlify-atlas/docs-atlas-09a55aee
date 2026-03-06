@@ -1,0 +1,105 @@
+---
+title: 'SaleOrder Model'
+description: 'Extended sale.order model for Bancard payment integration'
+---
+
+## Overview
+
+The `SaleOrder` model extends Odoo's standard `sale.order` model to store Bancard-specific payment process identifiers. These fields are used throughout the payment flow to track and manage Bancard transactions.
+
+## Model Definition
+
+```python
+from odoo import models, fields
+
+class SaleOrder(models.Model):
+    _inherit = "sale.order"
+```
+
+## Fields
+
+<ParamField name="process_id" type="Char">
+  Stores the Bancard process ID used to generate the payment iframe. This identifier is returned by Bancard when initiating a payment transaction.
+  
+  - **Stored**: Yes
+  - **Required**: No
+</ParamField>
+
+<ParamField name="shop_process_id" type="Integer">
+  Stores the shop process ID associated with the sale. This unique identifier tracks the specific payment process in Bancard's system and is used to correlate webhooks with sales orders.
+  
+  - **Stored**: Yes
+  - **Required**: No
+</ParamField>
+
+<ParamField name="shop_process_id_catastro" type="Char">
+  Stores the shop process ID specifically for catastro (cadastre) payments. Used for specialized payment workflows related to property registration.
+  
+  - **Stored**: Yes
+  - **Required**: No
+</ParamField>
+
+## Usage in Payment Flow
+
+### 1. Payment Initiation
+
+When a customer proceeds to checkout, the `_get_shop_payment_values` method in the WebsiteSale controller generates Bancard payment identifiers:
+
+```python
+def _get_shop_payment_values(self, order, **kwargs):
+    order = request.website.sale_get_order()
+    if order:
+        single = (
+            request.env["payment.provider"]
+            .sudo()
+            .search([("code", "=", "bancard")], limit=1)
+        )
+
+        process_id, shop_process_id = single.single_buy(
+            order.amount_total, order.name
+        )
+
+        order.write(
+            {
+                "process_id": process_id,
+                "shop_process_id": shop_process_id,
+            }
+        )
+        request.env.cr.commit()
+```
+
+### 2. Webhook Processing
+
+When Bancard sends a webhook notification, the `shop_process_id` field is used to identify the corresponding sale order:
+
+```python
+operation = payment_data.get("operation", {})
+shop_process_id = operation.get("shop_process_id")
+
+sale_order = (
+    request.env["sale.order"]
+    .sudo()
+    .search([("shop_process_id", "=", shop_process_id)], limit=1)
+)
+```
+
+### 3. Order Confirmation
+
+Once payment is approved, the order is automatically confirmed:
+
+```python
+if sale_order.state in ("draft", "sent"):
+    sale_order.write({"shop_process_id": shop_process_id})
+    sale_order.action_confirm()
+```
+
+## Related Models
+
+- [BancardUserCard](/api/user-card) - Stores customer payment cards
+- Payment Provider - Manages Bancard provider configuration
+
+## Security Considerations
+
+- The `process_id` is used to generate payment iframes and should be treated as sensitive
+- The `shop_process_id` serves as a public reference for webhook correlation
+- Always validate webhook data before confirming orders

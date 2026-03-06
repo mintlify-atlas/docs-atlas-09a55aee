@@ -1,0 +1,413 @@
+---
+title: 'Webhook Implementation'
+description: 'Understanding Bancard webhooks and payment flow in Odoo'
+---
+
+## Overview
+
+Bancard uses webhooks to notify your Odoo instance about payment status changes. The integration handles two types of webhook calls:
+
+1. **POST webhook**: Server-to-server notification from Bancard
+2. **GET webhook**: Browser redirect when customer returns from payment page
+
+## Webhook Endpoints
+
+The module defines two HTTP endpoints for handling payment callbacks:
+
+### Main Webhook Endpoint
+
+```python controllers/main.py
+@http.route(
+    "/payment/bancard/webhook",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["POST", "GET"],
+)
+def bancard_webhook(self, **post):
+    """Webhook de retorno de Bancard - maneja POST (servidor) y GET (usuario)"""
+```
+
+**URL**: `https://your-domain.com/payment/bancard/webhook`
+
+<Info>
+This endpoint handles both POST (server notifications) and GET (user redirects) requests.
+</Info>
+
+### Cancel/Return Endpoint
+
+```python controllers/main.py
+@http.route(
+    "/payment/bancard/return",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["GET", "POST"],
+)
+def bancard_return(self, **post):
+    """Usuario canceló el pago"""
+    _logger.info("🔴 BANCARD: Usuario canceló el pago")
+    return request.redirect("/shop/cart")
+```
+
+**URL**: `https://your-domain.com/payment/bancard/return`
+
+## Webhook Configuration
+
+Webhook URLs are automatically set when creating a payment request:
+
+```python models/method_single_buy.py
+def single_buy(self):
+    formatted_amount = f"{self.monto:.2f}"
+    payload = {
+        "public_key": self.clave_publica,
+        "operation": {
+            "token": self.generate_md5_single_buy(
+                self.clave_private,
+                int(self.shop_process_id),
+                f"{formatted_amount}",
+                "PYG",
+            ),
+            "shop_process_id": int(self.shop_process_id),
+            "amount": f"{formatted_amount}",
+            "currency": "PYG",
+            "additional_data": "",
+            "description": self.descripcion,
+            "return_url": urls.url_join(self.base_url, "/payment/bancard/webhook"),
+            "cancel_url": urls.url_join(self.base_url, "/payment/bancard/return"),
+        },
+    }
+    return payload
+```
+
+## Payment Flow
+
+<Steps>
+
+### Step 1: Payment Initiation
+
+When a customer chooses Bancard as payment method:
+
+```python controllers/main.py
+class WebsiteSaleSingleBuyCustom(WebsiteSale):
+    def _get_shop_payment_values(self, order, **kwargs):
+        order = request.website.sale_get_order()
+        if order:
+            single = (
+                request.env["payment.provider"]
+                .sudo()
+                .search([('code', '=', 'bancard')], limit=1)
+            )
+
+            process_id, shop_process_id = single.single_buy(
+                order.amount_total, order.name
+            )
+
+            order.write({
+                'process_id': process_id,
+                'shop_process_id': shop_process_id,
+            })
+```
+
+- System generates unique `shop_process_id` from sequence
+- Creates MD5 token for security
+- Calls Bancard API `/vpos/api/0.3/single_buy`
+- Receives `process_id` and redirects customer to Bancard
+
+### Step 2: POST Webhook (Server-to-Server)
+
+Bancard sends payment confirmation to your server:
+
+```python controllers/main.py
+if request.httprequest.method == "POST":
+    _logger.info("BANCARD WEBHOOK (POST - servidor a servidor)")
+    _logger.info("RAW: %s", request.httprequest.data)
+
+    payment_data = request.httprequest.get_json(silent=True) or {}
+    operation = payment_data.get("operation", {})
+    shop_process_id = operation.get("shop_process_id")
+    description_payment = operation.get("response_description")
+    extended_response_description_payment = operation.get(
+        "extended_response_description"
+    )
+
+    sale_order = (
+        request.env["sale.order"]
+        .sudo()
+        .search([('shop_process_id', '=', shop_process_id)], limit=1)
+    )
+```
+
+#### Successful Payment
+
+```python
+if description_payment == "Transaccion aprobada":
+    provider = (
+        request.env["payment.provider"]
+        .sudo()
+        .search([('code', '=', 'bancard')], limit=1)
+    )
+    payment_method_id = False
+    if provider.payment_method_ids:
+        payment_method_id = provider.payment_method_ids[0].id
+
+    tx_sudo = (
+        request.env["payment.transaction"]
+        .sudo()
+        .create({
+            "provider_id": provider.id,
+            "payment_method_id": payment_method_id,
+            "amount": sale_order.amount_total,
+            "currency_id": sale_order.currency_id.id,
+            "partner_id": sale_order.partner_id.id,
+            "sale_order_ids": [(6, 0, [sale_order.id])],
+            "reference": sale_order.name,
+            "state": "pending",
+        })
+    )
+    tx_sudo._set_done()
+
+    if sale_order.state in ('draft', 'sent'):
+        sale_order.write({'shop_process_id': shop_process_id})
+        sale_order.action_confirm()
+        _logger.info(f"✅ Orden confirmada: {sale_order.name}")
+
+    request.env.cr.commit()
+    return request.make_response("OK", status=200)
+```
+
+<Warning>
+Always return HTTP 200 with "OK" body for successful POST webhooks. This confirms receipt to Bancard.
+</Warning>
+
+#### Failed Payment
+
+```python
+elif description_payment == "Transaccion denegada":
+    _logger.info("Salio del IF Transaccion Denegada")
+    request.session["payment_message"] = (
+        f"{operation.get('extended_response_description')}"
+    )
+    request.session["payment_status"] = "error"
+```
+
+### Step 3: GET Webhook (User Redirect)
+
+After payment, Bancard redirects the customer back to your site:
+
+```python controllers/main.py
+elif request.httprequest.method == "GET":
+    _logger.info("BANCARD WEBHOOK (GET - retorno del usuario)")
+    _logger.info(f"GET PARAMS: {post}")
+
+    status = post.get("status")
+    if status == "payment_success":
+        # Limpiar carrito actual
+        request.website.sale_reset()
+        _logger.info("Pago Exitoso")
+        return request.redirect("/shop/confirmation")
+
+    elif status == "payment_fail":
+        _logger.info("Pago Fallo")
+        request.session["payment_message"] = (
+            "El pago fallo, contactar con su banco o intente nuevamente."
+        )
+        request.session["payment_status"] = "error"
+        return request.redirect("/shop/payment")
+```
+
+**GET Parameters:**
+- `status=payment_success`: Payment completed successfully
+- `status=payment_fail`: Payment failed or was declined
+
+</Steps>
+
+## Security Considerations
+
+### Token Generation
+
+All requests to Bancard must include a secure MD5 token:
+
+```python models/method_single_buy.py
+def generate_md5_single_buy(self, private_key, shop_process_id, amount, currency):
+    # Concatenar los valores
+    concatenated = f"{private_key}{shop_process_id}{amount}{currency}"
+
+    # Generar el hash MD5
+    token = hashlib.md5(concatenated.encode()).hexdigest()
+    _logger.info(f"GENERO EL TOKEN SINGLE BUY: {token}")
+    return token
+```
+
+<Warning>
+The token uses your private key. Never expose this key in client-side code or logs.
+</Warning>
+
+### CSRF Protection
+
+Webhooks have CSRF disabled since they come from external sources:
+
+```python
+csrf=False  # Required for external webhook calls
+```
+
+### Authentication
+
+```python
+auth="public"  # No Odoo login required for webhooks
+```
+
+This allows Bancard to send notifications without authentication, but you should:
+
+1. Validate the `shop_process_id` exists in your database
+2. Check payment data matches your records
+3. Only process each transaction once
+
+## Debugging Webhooks
+
+### Enable Debug Logging
+
+The controller includes extensive logging:
+
+```python
+_logger.info("BANCARD WEBHOOK (POST - servidor a servidor)")
+_logger.info("RAW: %s", request.httprequest.data)
+_logger.info(f"PAYMENT_DATA: {payment_data}")
+```
+
+View logs in Odoo:
+1. Enable Developer Mode
+2. Go to **Settings** → **Technical** → **Logging**
+3. Filter by `payment_bancard`
+
+### Test Webhook Locally
+
+For local development, use ngrok or similar tunneling service:
+
+```bash
+ngrok http 8069
+```
+
+Update your Odoo `web.base.url` parameter to the ngrok URL.
+
+### Common Issues
+
+<AccordionGroup>
+
+<Accordion title="Webhook not receiving POST notifications">
+
+**Symptoms**: GET works but POST webhook never fires
+
+**Causes**:
+- Firewall blocking Bancard's servers
+- Incorrect `web.base.url` configuration
+- SSL certificate issues
+
+**Solutions**:
+1. Check server firewall rules
+2. Verify `web.base.url`: Settings → Technical → Parameters → `web.base.url`
+3. Ensure HTTPS is properly configured
+4. Check Odoo logs for connection attempts
+
+</Accordion>
+
+<Accordion title="Transaction created multiple times">
+
+**Symptoms**: Duplicate payment transactions
+
+**Cause**: Webhook being called multiple times by Bancard
+
+**Solution**: Add idempotency check:
+
+```python
+# Check if transaction already exists
+existing_tx = request.env['payment.transaction'].sudo().search([
+    ('reference', '=', sale_order.name),
+    ('state', 'in', ['done', 'pending'])
+], limit=1)
+
+if existing_tx:
+    return request.make_response("OK", status=200)
+```
+
+</Accordion>
+
+<Accordion title="Sale order not confirmed">
+
+**Symptoms**: Payment successful but order stays in draft
+
+**Cause**: Order state check failing
+
+**Debug**:
+```python
+_logger.info(f"Order state: {sale_order.state}")
+_logger.info(f"Order shop_process_id: {sale_order.shop_process_id}")
+```
+
+Verify the order state is 'draft' or 'sent' before confirmation.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Webhook Payload Examples
+
+### POST Webhook - Success
+
+```json
+{
+  "operation": {
+    "shop_process_id": 123456,
+    "response_description": "Transaccion aprobada",
+    "extended_response_description": "Aprobada",
+    "amount": "150000.00",
+    "currency": "PYG",
+    "authorization_number": "123456",
+    "ticket_number": "789012",
+    "response_code": "00"
+  }
+}
+```
+
+### POST Webhook - Failure
+
+```json
+{
+  "operation": {
+    "shop_process_id": 123456,
+    "response_description": "Transaccion denegada",
+    "extended_response_description": "Fondos insuficientes",
+    "amount": "150000.00",
+    "currency": "PYG",
+    "response_code": "51"
+  }
+}
+```
+
+### GET Webhook - Success
+
+```
+GET /payment/bancard/webhook?status=payment_success
+```
+
+### GET Webhook - Failure
+
+```
+GET /payment/bancard/webhook?status=payment_fail
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Testing Guide" icon="vial" href="/guides/testing">
+  Learn how to test webhooks in staging environment
+</Card>
+
+<Card title="Setup Provider" icon="gear" href="/guides/setup-provider">
+  Back to provider configuration
+</Card>
+
+</CardGroup>

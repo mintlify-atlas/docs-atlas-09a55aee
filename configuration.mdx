@@ -1,0 +1,521 @@
+---
+title: Configuration
+description: Configure the Bancard payment provider in Odoo with API credentials and environment settings
+---
+
+## Overview
+
+After installing the Bancard module, you need to configure it with your Bancard API credentials and set the appropriate environment. This guide walks through all configuration steps to get your payment gateway operational.
+
+<Warning>
+The payment provider is created in **disabled** state by default. You must configure it with valid credentials before enabling it.
+</Warning>
+
+## Accessing Payment Provider Settings
+
+<Steps>
+  <Step title="Navigate to Payment Providers">
+    Go to **Website** → **Configuration** → **Payment Providers**
+  </Step>
+  <Step title="Select Bancard">
+    Find and click on **Bancard** in the payment providers list
+  </Step>
+  <Step title="Edit Configuration">
+    Click **Edit** to modify the provider settings
+  </Step>
+</Steps>
+
+## Required Configuration Fields
+
+The Bancard payment provider extends Odoo's standard payment provider with custom fields:
+
+### API Credentials
+
+These fields are defined in the `PaymentProvider` model:
+
+```python
+class PaymentProvider(models.Model):
+    _inherit = "payment.provider"
+    
+    clave_publica = fields.Char(
+        string="Pública", 
+        required_if_provider="bancard", 
+        groups="base.group_system"
+    )
+    clave_private = fields.Char(
+        string="Privada", 
+        required_if_provider="bancard", 
+        groups="base.group_system"
+    )
+```
+
+<Note>
+These fields are only visible to users with **System Administrator** access (`base.group_system` group).
+</Note>
+
+#### Public Key (Clave Pública)
+
+Enter your Bancard public API key in the **Pública** field.
+
+- Obtained from your Bancard merchant account
+- Used in all API requests to identify your merchant account
+- Required field when the provider is set to "bancard"
+
+#### Private Key (Clave Privada)
+
+Enter your Bancard private API key in the **Privada** field.
+
+- Keep this value secret and secure
+- Used to generate MD5 authentication tokens
+- Required field when the provider is set to "bancard"
+- Never expose this key in client-side code
+
+<Warning>
+**Security Note**: The private key is used to generate transaction tokens. Never share this key or commit it to version control. Store it securely in Odoo's encrypted fields.
+</Warning>
+
+### Token Generation
+
+The module uses the private key to generate MD5 tokens for API authentication:
+
+```python
+def generate_md5_single_buy(self, private_key, shop_process_id, amount, currency):
+    # Concatenate values
+    concatenated = f"{private_key}{shop_process_id}{amount}{currency}"
+    
+    # Generate MD5 hash
+    token = hashlib.md5(concatenated.encode()).hexdigest()
+    return token
+```
+
+## Environment Selection
+
+The module supports two environments:
+
+```python
+environment = fields.Selection(
+    [
+        ("https://vpos.infonet.com.py", "Produccion"),
+        ("https://vpos.infonet.com.py:8888", "Staging"),
+    ],
+    default="https://vpos.infonet.com.py:8888",
+)
+```
+
+### Staging Environment (Default)
+
+- **URL**: `https://vpos.infonet.com.py:8888`
+- **Use for**: Testing and development
+- **Default selection** upon installation
+- Test transactions without processing real payments
+- Use staging credentials provided by Bancard
+
+<Tip>
+Always test your integration in the staging environment before switching to production. This prevents accidental real charges during development.
+</Tip>
+
+### Production Environment
+
+- **URL**: `https://vpos.infonet.com.py`
+- **Use for**: Live payment processing
+- Requires production API credentials
+- Processes real transactions
+- Requires valid SSL certificate on your Odoo instance
+
+<Warning>
+**Before switching to production**:
+- Test thoroughly in staging environment
+- Verify webhook endpoints are accessible via HTTPS
+- Confirm your production API credentials with Bancard
+- Ensure your server has a valid SSL certificate
+</Warning>
+
+## Currency Configuration
+
+Bancard only supports Paraguayan Guaraní (PYG). The module enforces this restriction:
+
+```python
+def _get_supported_currencies(self):
+    """Override: Bancard solo soporta PYG."""
+    supported_currencies = super()._get_supported_currencies()
+    if self.code in ["bancard", "catastro"]:
+        supported_currencies = supported_currencies.filtered(
+            lambda c: c.name == "PYG"
+        )
+    return supported_currencies
+```
+
+### Enable PYG Currency
+
+<Steps>
+  <Step title="Activate PYG Currency">
+    Navigate to **Accounting** → **Configuration** → **Currencies**
+  </Step>
+  <Step title="Search for PYG">
+    Find "PYG - Paraguayan Guaraní" in the list
+  </Step>
+  <Step title="Activate Currency">
+    Click **Activate** if it's not already active
+  </Step>
+  <Step title="Set Exchange Rate">
+    Configure the exchange rate if your company uses a different base currency
+  </Step>
+</Steps>
+
+<Info>
+The module automatically filters available currencies to show only PYG when Bancard is selected as the payment provider.
+</Info>
+
+## Payment Provider Settings
+
+Configure these standard Odoo payment provider fields:
+
+### State
+
+Set the provider state to control availability:
+
+- **Disabled**: Payment method not available (default)
+- **Enabled**: Available in test mode
+- **Test Mode**: Use for testing before going live
+
+### Published
+
+Make the payment provider visible on your website:
+
+```xml
+<field name="is_published" eval="False" />
+```
+
+- Set to **Published** to display on checkout pages
+- Keep unpublished during configuration
+
+### Company
+
+Associate the provider with your company:
+
+```xml
+<field name="company_id" ref="base.main_company" />
+```
+
+### Available Currencies
+
+Automatically set to PYG:
+
+```xml
+<field name="available_currency_ids" eval="[Command.set([ref('base.PYG')])]"/>
+```
+
+## Tokenization Settings
+
+Bancard handles payments without requiring Odoo-side tokenization:
+
+```python
+def _is_tokenization_required(self, **kwargs):
+    """Override: Bancard no requiere tokenización."""
+    if self.code in ["bancard", "catastro"]:
+        return False
+    return super()._is_tokenization_required(**kwargs)
+```
+
+<Note>
+While Odoo tokenization is disabled, Bancard's own card storage system is available through the `new_cards` and `get_cards` methods.
+</Note>
+
+## Webhook Configuration
+
+The module automatically configures webhook URLs for payment confirmations:
+
+### Return URL
+
+```python
+"return_url": urls.url_join(self.base_url, "/payment/bancard/webhook")
+```
+
+This endpoint receives payment confirmations from Bancard.
+
+### Cancel URL
+
+```python
+"cancel_url": urls.url_join(self.base_url, "/payment/bancard/return")
+```
+
+This endpoint handles payment cancellations.
+
+<Warning>
+**Webhook Requirements**:
+- URLs must be publicly accessible
+- HTTPS required in production
+- No authentication required (public endpoints)
+- Must respond with HTTP 200 for successful processing
+</Warning>
+
+## Verification Steps
+
+After configuration, verify everything is set up correctly:
+
+### Test API Connection
+
+The module includes a method to make API requests:
+
+```python
+def _bancard_make_request(self, payload, endpoint):
+    """Realiza una petición a la API de Bancard."""
+    self.ensure_one()
+    response = requests.post(
+        f"{self.environment}{endpoint}",
+        json=payload,
+    )
+    return response.json()
+```
+
+### Validate Configuration
+
+The module validates credentials when processing payments:
+
+```python
+def single_buy(self, monto, descripcion):
+    self.ensure_one()
+    
+    if not all([self.clave_publica, self.clave_private]):
+        raise ValidationError(
+            _("El proveedor de pago Bancard no está configurado correctamente.")
+        )
+```
+
+<Tip>
+Attempt a test transaction in staging mode to verify your credentials are correct. The system will raise a validation error if credentials are missing.
+</Tip>
+
+## Complete Configuration Checklist
+
+Before enabling the payment provider, ensure:
+
+<Steps>
+  <Step title="API Credentials">
+    ✓ Public key entered in **Clave Pública**
+    <br />✓ Private key entered in **Clave Privada**
+  </Step>
+  <Step title="Environment">
+    ✓ **Staging** selected for testing, or **Production** for live payments
+  </Step>
+  <Step title="Currency">
+    ✓ PYG currency is active in Odoo
+    <br />✓ PYG is set as available currency for the provider
+  </Step>
+  <Step title="Webhook Access">
+    ✓ Webhook URLs are publicly accessible
+    <br />✓ HTTPS enabled for production environment
+  </Step>
+  <Step title="Provider State">
+    ✓ Provider is enabled and published
+  </Step>
+</Steps>
+
+## Testing the Configuration
+
+### Staging Test Transaction
+
+<Steps>
+  <Step title="Configure Staging">
+    Set environment to `https://vpos.infonet.com.py:8888` with staging credentials
+  </Step>
+  <Step title="Enable Provider">
+    Set state to **Enabled** and publish the provider
+  </Step>
+  <Step title="Create Test Order">
+    Add items to cart and proceed to checkout in your Odoo e-commerce store
+  </Step>
+  <Step title="Select Bancard">
+    Choose Bancard as payment method
+  </Step>
+  <Step title="Complete Payment">
+    Use Bancard's test card credentials to complete the transaction
+  </Step>
+  <Step title="Verify Webhook">
+    Check Odoo logs to confirm webhook was received and processed
+  </Step>
+</Steps>
+
+### Check Transaction Logs
+
+The module logs all API interactions:
+
+```python
+_logger.info(f"QUE CONTIEN EL RESPONTE DEL METODO: {response}")
+_logger.info(f"QUE ME DEVUELVE EN EL RESPONSE:{response}")
+```
+
+View logs to debug issues:
+
+```bash
+tail -f /var/log/odoo/odoo-server.log | grep -i bancard
+```
+
+## Advanced Configuration
+
+### Shop Process ID Sequence
+
+Customize the shop process ID generation:
+
+```python
+shop_process_id = self.env["ir.sequence"].next_by_code("bancard.shop.process")
+```
+
+To modify the sequence:
+
+1. Go to **Settings** → **Technical** → **Sequences**
+2. Find "Bancard Shop Process"
+3. Adjust the next number or increment
+
+### Card Management
+
+Enable card tokenization features:
+
+```python
+# Register a new card
+process_id = provider.new_cards(user_id)
+
+# Retrieve stored cards
+cards = provider.get_cards(user_id)
+```
+
+<Note>
+Card management requires additional configuration and user ID mapping. This is typically used for recurring payments or saved payment methods.
+</Note>
+
+## Troubleshooting
+
+### Common Configuration Issues
+
+**"El proveedor de pago Bancard no está configurado correctamente"**
+- Verify both public and private keys are entered
+- Check for extra spaces or invalid characters
+- Ensure keys match your selected environment
+
+**Provider not appearing at checkout**
+- Verify provider state is **Enabled**
+- Ensure provider is **Published**
+- Check that PYG currency is active
+- Confirm sale order currency is PYG
+
+**Webhook not receiving callbacks**
+- Verify URLs are publicly accessible
+- Check firewall settings
+- Ensure HTTPS is configured for production
+- Test webhook URL manually with curl
+
+**API connection errors**
+- Verify environment URL is correct
+- Check network connectivity from Odoo server
+- Confirm Bancard service status
+- Review request/response in logs
+
+### Debug Mode
+
+Enable detailed logging:
+
+```python
+import logging
+_logger = logging.getLogger(__name__)
+_logger.setLevel(logging.DEBUG)
+```
+
+## Security Best Practices
+
+<Warning>
+**Protect your private key**:
+- Never commit credentials to version control
+- Use environment variables for keys in development
+- Restrict access to System Administrator role only
+- Rotate keys periodically
+- Monitor API usage for anomalies
+</Warning>
+
+### Access Control
+
+Credential fields are restricted:
+
+```python
+groups="base.group_system"
+```
+
+Only users in the System Administrator group can view or edit API credentials.
+
+### HTTPS Requirement
+
+<Info>
+In production, your Odoo instance **must** use HTTPS to receive webhooks from Bancard. Most payment gateways reject insecure HTTP endpoints.
+</Info>
+
+## Production Deployment
+
+### Pre-Production Checklist
+
+Before switching to production:
+
+1. **Test thoroughly in staging**
+   - Complete end-to-end transaction flow
+   - Test successful payments
+   - Test failed payments
+   - Test payment cancellations
+   - Verify webhook reliability
+
+2. **Update credentials**
+   - Switch to production public key
+   - Switch to production private key
+   - Update environment to production URL
+
+3. **Verify infrastructure**
+   - SSL certificate is valid and not expiring soon
+   - Webhook endpoints return 200 status
+   - Server has adequate resources
+   - Backup systems are in place
+
+4. **Monitor logs**
+   - Set up log monitoring
+   - Configure alerts for errors
+   - Track transaction success rates
+
+### Going Live
+
+<Steps>
+  <Step title="Update Environment">
+    Change environment to `https://vpos.infonet.com.py`
+  </Step>
+  <Step title="Update Credentials">
+    Enter production public and private keys
+  </Step>
+  <Step title="Enable Provider">
+    Set state to **Enabled** and publish
+  </Step>
+  <Step title="Test Live Transaction">
+    Process a small real transaction to verify
+  </Step>
+  <Step title="Monitor">
+    Watch logs and transaction records for the first few hours
+  </Step>
+</Steps>
+
+## Support and Maintenance
+
+### Regular Maintenance Tasks
+
+- Monitor transaction success rates
+- Review error logs weekly
+- Keep Odoo and module updated
+- Rotate API credentials periodically
+- Test webhook endpoints regularly
+
+### Getting Help
+
+If you encounter issues:
+
+1. Check Odoo logs for detailed error messages
+2. Review Bancard API documentation
+3. Verify configuration against this guide
+4. Contact Bancard support for API-related issues
+5. Check Odoo community forums for module-specific questions
+
+<Tip>
+Keep your module version up to date to benefit from bug fixes and security patches.
+</Tip>

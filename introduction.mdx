@@ -1,0 +1,137 @@
+---
+title: Introduction
+description: Payment gateway integration for Bancard/vPOS in Paraguay for Odoo e-commerce
+---
+
+## What is Bancard?
+
+Bancard is Paraguay's leading payment gateway provider, offering secure online payment processing through their vPOS platform. This Odoo module provides seamless integration between your Odoo e-commerce store and Bancard's payment infrastructure, enabling businesses in Paraguay to accept online payments efficiently.
+
+## Why Use This Module?
+
+The **Provider Payment Method Bancard** module enables Paraguayan businesses to:
+
+<CardGroup cols={2}>
+  <Card title="Accept Online Payments" icon="credit-card">
+    Process payments directly through Bancard's vPOS platform with full PCI compliance
+  </Card>
+  <Card title="Native Odoo Integration" icon="plug">
+    Works seamlessly with Odoo's website_sale module for e-commerce transactions
+  </Card>
+  <Card title="Card Management" icon="wallet">
+    Store and retrieve customer cards securely through Bancard's tokenization system
+  </Card>
+  <Card title="Multiple Environments" icon="server">
+    Support for both production and staging environments for testing
+  </Card>
+</CardGroup>
+
+## Key Features
+
+### Single Buy Operations
+Process one-time payments with automatic order confirmation upon successful transaction. The module handles the complete payment flow from checkout to confirmation.
+
+### Secure Webhooks
+Automatic server-to-server notifications ensure reliable payment confirmation, with support for both POST webhooks (server notifications) and GET redirects (user returns).
+
+### PYG Currency Support
+Optimized specifically for Paraguayan Guaraní (PYG) transactions, the module enforces currency validation to ensure compatibility with Bancard's requirements.
+
+### Automatic Transaction Management
+Seamless integration with Odoo's payment transaction system creates and manages payment records automatically, linking them to sales orders.
+
+### Card Tokenization
+Support for Bancard's card management API allows customers to save cards for future purchases (new cards registration and retrieval).
+
+## Architecture Overview
+
+The module extends Odoo's core payment provider framework with Bancard-specific functionality:
+
+```python
+class PaymentProvider(models.Model):
+    _inherit = "payment.provider"
+    
+    code = fields.Selection(
+        selection_add=[("bancard", "Bancard")],
+        ondelete={"bancard": "set default"},
+    )
+```
+
+### Core Components
+
+<Steps>
+  <Step title="Payment Provider Model">
+    Extends `payment.provider` with Bancard-specific fields and methods for API communication
+  </Step>
+  <Step title="Payment Methods">
+    Implements three payment operations:
+    - `single_buy`: One-time payment processing
+    - `new_cards`: Card registration
+    - `get_cards`: Retrieve saved cards
+  </Step>
+  <Step title="Webhook Controller">
+    Handles payment confirmations and user redirects at `/payment/bancard/webhook`
+  </Step>
+  <Step title="Sale Order Integration">
+    Extends website sale controller to initialize Bancard transactions during checkout
+  </Step>
+</Steps>
+
+### Payment Flow
+
+<Note>
+The module uses MD5 token generation for request authentication, combining your private key with transaction-specific parameters.
+</Note>
+
+1. **Checkout Initiation**: When a customer proceeds to payment, the module calls Bancard's `single_buy` API
+2. **Redirect to vPOS**: Customer is redirected to Bancard's payment page with a unique process ID
+3. **Payment Processing**: Customer completes payment on Bancard's secure platform
+4. **Webhook Notification**: Bancard sends a POST request to confirm the transaction status
+5. **Order Confirmation**: Upon successful payment, the sale order is automatically confirmed
+6. **Customer Return**: User is redirected back to the confirmation page
+
+## API Endpoints Used
+
+The module integrates with the following Bancard vPOS API v0.3 endpoints:
+
+- `/vpos/api/0.3/single_buy` - Process single payment transactions
+- `/vpos/api/0.3/cards/new` - Register new customer cards
+- `/vpos/api/0.3/users/{user_id}/cards` - Retrieve stored cards
+
+<Info>
+The module automatically handles environment switching between production (`https://vpos.infonet.com.py`) and staging (`https://vpos.infonet.com.py:8888`) servers.
+</Info>
+
+## Technical Specifications
+
+- **Odoo Version Compatibility**: Requires Odoo with `website_sale` module
+- **License**: LGPL-3
+- **Category**: Web
+- **Dependencies**: `website_sale`
+- **Supported Currency**: PYG (Paraguayan Guaraní) only
+
+## Getting Started
+
+Ready to integrate Bancard payments into your Odoo store?
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install the module and configure dependencies
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Set up your Bancard credentials and environment
+  </Card>
+</CardGroup>
+
+## Requirements
+
+Before installing this module, ensure you have:
+
+- Active Bancard merchant account with vPOS access
+- Public and private API keys from Bancard
+- Odoo instance with `website_sale` module installed
+- Valid SSL certificate for webhook endpoints (required in production)
+
+<Warning>
+This module is specifically designed for businesses operating in Paraguay. Bancard only supports PYG currency transactions.
+</Warning>

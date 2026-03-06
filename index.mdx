@@ -1,97 +1,85 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Welcome to Bancard Payment Gateway"
+description: "Integrate Bancard/vPos payment processing seamlessly into your Odoo e-commerce platform"
 ---
 
-## Setting up
+<Note>
+This module enables Paraguayan businesses to accept online payments through Bancard's vPos payment gateway with full PYG currency support.
+</Note>
 
-Get your documentation site up and running in minutes.
+## Key Features
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Single Buy Processing" icon="credit-card" href="/concepts/single-buy">
+    Process one-time payments with Bancard's Single Buy API
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Card Management" icon="wallet" href="/concepts/card-management">
+    Securely tokenize and manage customer payment cards
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Webhook Integration" icon="webhook" href="/guides/webhooks">
+    Automated payment confirmation and order processing
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="PYG Currency Support" icon="coins" href="/configuration">
+    Native support for Paraguayan Guaraní transactions
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Quick Start
 
-Everything you need to create world-class documentation.
+Get your Bancard payment gateway up and running in three simple steps:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Install the Module">
+    Add the Bancard payment provider module to your Odoo instance
+    
+    ```python
+    # Add to your Odoo addons directory
+    git clone https://github.com/YamilTorricoVasquez/bancard
+    ```
+  </Step>
+  
+  <Step title="Configure Provider">
+    Set up your Bancard API credentials in Odoo payment settings
+    
+    Navigate to **Website → Configuration → Payment Providers** and configure your public and private keys
+  </Step>
+  
+  <Step title="Test Integration">
+    Process a test transaction using the staging environment
+    
+    Use the staging URL: `https://vpos.infonet.com.py:8888`
+  </Step>
+</Steps>
 
-## Need inspiration?
+## How It Works
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+The Bancard payment gateway integrates directly into your Odoo e-commerce checkout flow:
+
+1. **Customer Checkout** — Customer proceeds to payment in your Odoo store
+2. **Payment Initiation** — Odoo sends payment request to Bancard vPos
+3. **Secure Payment** — Customer completes payment in Bancard's secure iframe
+4. **Webhook Confirmation** — Bancard notifies your system of payment status
+5. **Order Processing** — Odoo automatically confirms and processes the order
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Step-by-step installation instructions
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure your payment provider settings
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/payment-provider">
+    Complete API documentation
+  </Card>
+  <Card title="Testing Guide" icon="flask" href="/guides/testing">
+    Test your integration safely
+  </Card>
+</CardGroup>
+
+## Production Ready
+
+This module supports both staging and production environments, allowing you to test thoroughly before going live. Configure environment-specific endpoints and credentials through the Odoo admin interface.
+
+<Info>
+The module includes automatic currency validation to ensure only PYG transactions are processed through Bancard.
+</Info>

@@ -1,0 +1,255 @@
+---
+title: 'MethodSingleBuy'
+description: 'Handles single purchase transactions with Bancard payment gateway'
+---
+
+## Overview
+
+The `MethodSingleBuy` class constructs and manages single payment transaction requests to the Bancard API. It handles payload generation, token creation, and URL configuration for payment processing.
+
+**Source**: `models/method_single_buy.py:8`
+
+## Constructor
+
+Initializes a new single buy transaction instance.
+
+**Source**: `models/method_single_buy.py:9`
+
+<ParamField path="monto" type="float" required>
+  Transaction amount to be charged
+</ParamField>
+
+<ParamField path="descripcion" type="str" required>
+  Description of the transaction (visible to the customer)
+</ParamField>
+
+<ParamField path="clave_publica" type="str" required>
+  Bancard public API key
+</ParamField>
+
+<ParamField path="clave_private" type="str" required>
+  Bancard private API key (used for token generation)
+</ParamField>
+
+<ParamField path="base_url" type="str" required>
+  Base URL of the Odoo instance for webhook callbacks
+</ParamField>
+
+<ParamField path="shop_process_id" type="int" required>
+  Unique shop process identifier for tracking the transaction
+</ParamField>
+
+```python
+method_single_buy = MethodSingleBuy(
+    monto=150000.00,
+    descripcion="Payment for Order #12345",
+    clave_publica="your_public_key",
+    clave_private="your_private_key",
+    base_url="https://yourshop.com",
+    shop_process_id=12345,
+)
+```
+
+## Methods
+
+### single_buy()
+
+Generates the complete payload for a single buy transaction.
+
+**Source**: `models/method_single_buy.py:25`
+
+<ResponseField name="payload" type="dict">
+  Complete request payload ready to send to Bancard API
+</ResponseField>
+
+```python
+payload = method_single_buy.single_buy()
+```
+
+**Payload Structure**:
+
+```python
+{
+    "public_key": self.clave_publica,
+    "operation": {
+        "token": "<md5_hash>",
+        "shop_process_id": 12345,
+        "amount": "150000.00",
+        "currency": "PYG",
+        "additional_data": "",
+        "description": "Payment for Order #12345",
+        "return_url": "https://yourshop.com/payment/bancard/webhook",
+        "cancel_url": "https://yourshop.com/payment/bancard/return",
+    },
+}
+```
+
+**Field Details**:
+
+<ResponseField name="public_key" type="str">
+  Public API key for authentication
+</ResponseField>
+
+<ResponseField name="operation.token" type="str">
+  MD5 hash generated from private key, shop process ID, amount, and currency
+</ResponseField>
+
+<ResponseField name="operation.shop_process_id" type="int">
+  Unique identifier for the transaction
+</ResponseField>
+
+<ResponseField name="operation.amount" type="str">
+  Formatted amount with 2 decimal places (e.g., "150000.00")
+</ResponseField>
+
+<ResponseField name="operation.currency" type="str">
+  Currency code (always "PYG" for Paraguayan Guaraní)
+</ResponseField>
+
+<ResponseField name="operation.additional_data" type="str">
+  Optional additional data (empty string by default)
+</ResponseField>
+
+<ResponseField name="operation.description" type="str">
+  Transaction description visible to customer
+</ResponseField>
+
+<ResponseField name="operation.return_url" type="str">
+  Webhook URL where Bancard sends transaction results
+</ResponseField>
+
+<ResponseField name="operation.cancel_url" type="str">
+  URL where customer is redirected on cancellation
+</ResponseField>
+
+**Returns**: Dictionary containing the complete payload
+
+---
+
+### generate_md5_single_buy()
+
+Generates the MD5 security token required by Bancard API.
+
+**Source**: `models/method_single_buy.py:48`
+
+<ParamField path="private_key" type="str" required>
+  Bancard private API key
+</ParamField>
+
+<ParamField path="shop_process_id" type="int" required>
+  Unique shop process identifier
+</ParamField>
+
+<ParamField path="amount" type="str" required>
+  Formatted amount string (e.g., "150000.00")
+</ParamField>
+
+<ParamField path="currency" type="str" required>
+  Currency code ("PYG")
+</ParamField>
+
+<ResponseField name="token" type="str">
+  32-character MD5 hexadecimal hash
+</ResponseField>
+
+```python
+token = method_single_buy.generate_md5_single_buy(
+    private_key="your_private_key",
+    shop_process_id=12345,
+    amount="150000.00",
+    currency="PYG"
+)
+# Returns: "5d41402abc4b2a76b9719d911017c592" (example)
+```
+
+**Token Generation Algorithm**:
+
+1. Concatenate: `private_key + shop_process_id + amount + currency`
+2. Encode to bytes: `concatenated.encode()`
+3. Generate MD5 hash: `hashlib.md5(bytes).hexdigest()`
+
+**Implementation**:
+
+```python
+concatenated = f"{private_key}{shop_process_id}{amount}{currency}"
+token = hashlib.md5(concatenated.encode()).hexdigest()
+```
+
+**Returns**: MD5 hash string
+
+## Complete Usage Example
+
+```python
+from models.method_single_buy import MethodSingleBuy
+
+# Initialize the method
+method = MethodSingleBuy(
+    monto=250000.00,
+    descripcion="Subscription payment - Monthly Plan",
+    clave_publica="pub_abc123def456",
+    clave_private="priv_xyz789ghi012",
+    base_url="https://mystore.example.com",
+    shop_process_id=98765,
+)
+
+# Generate the payload
+payload = method.single_buy()
+
+# Send to Bancard API
+import requests
+response = requests.post(
+    "https://vpos.infonet.com.py/vpos/api/0.3/single_buy",
+    json=payload
+)
+
+result = response.json()
+print(f"Process ID: {result.get('process_id')}")
+```
+
+## URL Configuration
+
+The class automatically constructs callback URLs using `werkzeug.urls.url_join()`:
+
+<ResponseField name="return_url" type="str">
+  `{base_url}/payment/bancard/webhook` - Success/completion webhook
+</ResponseField>
+
+<ResponseField name="cancel_url" type="str">
+  `{base_url}/payment/bancard/return` - Cancellation redirect
+</ResponseField>
+
+```python
+from werkzeug import urls
+
+return_url = urls.url_join(self.base_url, "/payment/bancard/webhook")
+cancel_url = urls.url_join(self.base_url, "/payment/bancard/return")
+```
+
+## Amount Formatting
+
+Amounts are automatically formatted to 2 decimal places:
+
+```python
+formatted_amount = f"{self.monto:.2f}"
+# Input: 150000 → Output: "150000.00"
+# Input: 150000.5 → Output: "150000.50"
+```
+
+## Security Considerations
+
+- The private key is never sent in the API request
+- The private key is only used to generate the MD5 token
+- Token must be regenerated for each transaction
+- Shop process ID must be unique for each transaction
+
+## API Endpoint
+
+The generated payload is sent to:
+
+```
+POST {environment}/vpos/api/0.3/single_buy
+```
+
+Where `environment` is either:
+- Production: `https://vpos.infonet.com.py`
+- Staging: `https://vpos.infonet.com.py:8888`

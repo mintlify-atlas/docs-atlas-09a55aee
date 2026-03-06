@@ -1,0 +1,287 @@
+---
+title: Installation
+description: Step-by-step guide to install the Bancard Payment Gateway module for Odoo
+---
+
+## Prerequisites
+
+Before installing the Bancard payment module, verify that your Odoo environment meets the following requirements:
+
+<Steps>
+  <Step title="Odoo Installation">
+    Ensure you have a working Odoo installation with the `website_sale` module available
+  </Step>
+  <Step title="Bancard Account">
+    Obtain a Bancard merchant account with vPOS API access and your API credentials (public and private keys)
+  </Step>
+  <Step title="Python Dependencies">
+    The module requires standard Python libraries:
+    - `requests` - for HTTP API calls
+    - `hashlib` - for MD5 token generation
+    - `werkzeug` - for URL handling (included with Odoo)
+  </Step>
+  <Step title="SSL Certificate (Production)">
+    For production environments, ensure your Odoo instance has a valid SSL certificate as Bancard requires HTTPS for webhook endpoints
+  </Step>
+</Steps>
+
+<Warning>
+This module only supports **Paraguayan Guaraní (PYG)** currency. Ensure your Odoo instance has PYG currency enabled before installation.
+</Warning>
+
+## Installation Steps
+
+### 1. Download the Module
+
+Place the module files in your Odoo addons directory:
+
+```bash
+cd /path/to/odoo/addons
+# Copy or clone the bancard module directory here
+cp -r /path/to/bancard ./bancard
+```
+
+<Note>
+The module directory should be named exactly as referenced in the imports (typically `bancard` or as specified in `__manifest__.py`).
+</Note>
+
+### 2. Update Odoo Apps List
+
+Restart your Odoo server and update the apps list to make the module visible:
+
+```bash
+# Restart Odoo service
+sudo systemctl restart odoo
+
+# Or if running manually
+./odoo-bin --addons-path=/path/to/addons --update=all -d your_database
+```
+
+Alternatively, from the Odoo interface:
+
+<Steps>
+  <Step title="Enable Developer Mode">
+    Navigate to **Settings** → Activate **Developer Mode**
+  </Step>
+  <Step title="Update Apps List">
+    Go to **Apps** → Click **Update Apps List**
+  </Step>
+  <Step title="Search for Module">
+    Search for "Bancard" or "Provider Payment Method Bancard"
+  </Step>
+</Steps>
+
+### 3. Install the Module
+
+From the Odoo Apps interface:
+
+1. Search for **"Provider Payment Method Bancard"**
+2. Click the **Install** button
+3. Wait for the installation to complete
+
+```bash
+# Or install via command line
+./odoo-bin -d your_database -i bancard --stop-after-init
+```
+
+## Module Manifest Details
+
+The module is defined in `__manifest__.py` with the following specifications:
+
+```python
+{
+    "name": "Provider Payment Method Bancard",
+    "version": "1.0",
+    "category": "Web",
+    "summary": "Proveedor de pago Bancar para Paraguay",
+    "description": """
+        Módulo que permite la integracion con la pasarela de pago bancard/vPos
+    """,
+    "depends": ["website_sale"],
+    "installable": True,
+    "application": False,
+    "post_init_hook": "post_init_hook",
+    "uninstall_hook": "uninstall_hook",
+    "license": "LGPL-3",
+}
+```
+
+<Info>
+The module depends on `website_sale`, which will be automatically installed if not already present.
+</Info>
+
+## Post-Installation Hook
+
+The module includes an automatic post-installation hook that sets up the Bancard payment provider:
+
+```python
+from odoo.addons.payment import setup_provider
+
+def post_init_hook(env):
+    setup_provider(env, 'bancard')
+```
+
+This hook automatically:
+- Registers the Bancard payment provider in the system
+- Creates the payment method record
+- Sets up initial configuration with disabled state
+
+<Note>
+The payment provider is created in **disabled** state by default. You must configure and enable it manually after installation.
+</Note>
+
+## Data Files Installed
+
+The installation process loads the following data files:
+
+| File | Purpose |
+|------|--------|
+| `data/payment_provider_single_buy.xml` | Creates the Bancard payment provider and payment method records |
+| `data/ir_sequence.xml` | Sets up sequence generators for shop process IDs and card IDs |
+| `data/facturas.xml` | Invoice-related configurations |
+| `views/payment_provider_views.xml` | Admin interface for provider configuration |
+| `views/iframe_bancard_template.xml` | Frontend payment iframe template |
+| `security/ir.model.access.csv` | Access rights for custom models |
+
+## Sequence Configuration
+
+Two sequences are automatically created:
+
+```xml
+<record id="seq_bancard_shop_process" model="ir.sequence">
+    <field name="name">Bancard Shop Process</field>
+    <field name="code">bancard.shop.process</field>
+    <field name="padding">5</field>
+    <field name="number_next">16500</field>
+    <field name="number_increment">1</field>
+</record>
+
+<record id="seq_bancard_card_id" model="ir.sequence">
+    <field name="name">Bancard Card Id</field>
+    <field name="code">bancard.card.id</field>
+    <field name="padding">1</field>
+    <field name="number_next">1</field>
+    <field name="number_increment">1</field>
+</record>
+```
+
+<Tip>
+The `shop_process_id` sequence starts at 16500 to avoid conflicts with Bancard's system. You can adjust this in the sequence configuration if needed.
+</Tip>
+
+## Verification
+
+After installation, verify the module is working correctly:
+
+### Check Payment Provider
+
+<Steps>
+  <Step title="Navigate to Payment Providers">
+    Go to **Website** → **Configuration** → **Payment Providers**
+  </Step>
+  <Step title="Find Bancard">
+    Look for "Bancard" in the list of payment providers
+  </Step>
+  <Step title="Verify Status">
+    The provider should be present with status "Disabled"
+  </Step>
+</Steps>
+
+### Check Payment Method
+
+The payment method should be automatically created:
+
+```xml
+<record id="payment_method_bancard" model="payment.method">
+    <field name="name">Bancard</field>
+    <field name="code">bancard</field>
+    <field name="sequence">10</field>
+</record>
+```
+
+### Verify Sequences
+
+Check that the sequences are created:
+
+```python
+# In Odoo shell or through Settings → Technical → Sequences
+sequence = env['ir.sequence'].search([('code', '=', 'bancard.shop.process')])
+print(sequence.name)  # Should output: "Bancard Shop Process"
+```
+
+### Check Models
+
+Verify the payment provider model extension is loaded:
+
+```python
+# Access the payment provider model
+provider = env['payment.provider'].search([('code', '=', 'bancard')])
+print(provider.name)  # Should output: "Bancard"
+print(hasattr(provider, 'clave_publica'))  # Should output: True
+```
+
+## Troubleshooting
+
+<Warning>
+If you encounter issues during installation, check the Odoo logs for detailed error messages.
+</Warning>
+
+### Common Issues
+
+**Module not appearing in Apps list**
+- Ensure the module directory is in the correct addons path
+- Verify `__manifest__.py` is present and properly formatted
+- Update the apps list from the Odoo interface
+
+**Dependency errors**
+- Install `website_sale` module first
+- Ensure you're using a compatible Odoo version
+
+**Import errors**
+- Check that all Python dependencies are installed
+- Verify `requests` library is available: `pip install requests`
+
+**Post-installation hook fails**
+- Check Odoo logs for specific error messages
+- Verify database permissions
+- Ensure `payment` module is installed
+
+### Log Files
+
+Check Odoo logs for installation details:
+
+```bash
+# Default log location
+tail -f /var/log/odoo/odoo-server.log
+
+# Or check journalctl if running as service
+sudo journalctl -u odoo -f
+```
+
+## Uninstallation
+
+If you need to uninstall the module, it includes an uninstall hook:
+
+```python
+from odoo.addons.payment import reset_payment_provider
+
+def uninstall_hook(env):
+    reset_payment_provider(env, 'bancard')
+```
+
+This ensures clean removal by:
+- Resetting the payment provider configuration
+- Removing provider-specific records
+- Maintaining data integrity
+
+<Note>
+Uninstalling the module will not delete existing payment transactions or sale orders, but the Bancard payment provider will no longer be available.
+</Note>
+
+## Next Steps
+
+Now that the module is installed, proceed to configuration:
+
+<Card title="Configure Bancard" icon="gear" href="/configuration">
+  Set up your API credentials, environment, and enable the payment provider
+</Card>

@@ -1,0 +1,173 @@
+---
+title: 'SingleBuyController API'
+description: 'Webhook controller for handling Bancard payment notifications and user redirects'
+---
+
+## Overview
+
+The `SingleBuyController` handles Bancard payment gateway callbacks through webhooks. It processes both server-to-server POST notifications and user redirect GET requests.
+
+## bancard_webhook
+
+Handles payment notifications from Bancard via POST (server-to-server) and GET (user redirect).
+
+### HTTP Route
+
+```python
+@http.route(
+    "/payment/bancard/webhook",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["POST", "GET"],
+)
+def bancard_webhook(self, **post):
+```
+
+<ParamField path="post" type="dict">
+  Keyword arguments containing request parameters (GET) or JSON payload (POST)
+</ParamField>
+
+### POST Request (Server-to-Server)
+
+Bancard sends a JSON payload with payment operation details.
+
+#### Request Body
+
+```json
+{
+  "operation": {
+    "shop_process_id": 12345,
+    "response_description": "Transaccion aprobada",
+    "extended_response_description": "Payment approved"
+  }
+}
+```
+
+<ParamField body="operation.shop_process_id" type="integer" required>
+  Unique identifier linking the payment to the sale order
+</ParamField>
+
+<ParamField body="operation.response_description" type="string" required>
+  Payment status description (e.g., "Transaccion aprobada", "Transaccion denegada")
+</ParamField>
+
+<ParamField body="operation.extended_response_description" type="string">
+  Extended payment response description with additional details
+</ParamField>
+
+#### Response
+
+Returns HTTP 200 with "OK" text for successful processing.
+
+### GET Request (User Redirect)
+
+Bancard redirects the user back to this endpoint after payment.
+
+#### Query Parameters
+
+<ParamField query="status" type="string" required>
+  Payment result status:
+  - `payment_success` - Payment completed successfully
+  - `payment_fail` - Payment failed or was declined
+</ParamField>
+
+#### Behavior
+
+**Payment Success:**
+- Clears the shopping cart
+- Redirects to `/shop/confirmation`
+
+**Payment Failure:**
+- Sets error message in session
+- Redirects to `/shop/payment` for retry
+
+### Payment Processing Logic
+
+```python
+if description_payment == "Transaccion aprobada":
+    # 1. Find payment provider
+    provider = request.env["payment.provider"].sudo().search(
+        [("code", "=", "bancard")], limit=1
+    )
+    
+    # 2. Create payment transaction
+    tx_sudo = request.env["payment.transaction"].sudo().create({
+        "provider_id": provider.id,
+        "payment_method_id": payment_method_id,
+        "amount": sale_order.amount_total,
+        "currency_id": sale_order.currency_id.id,
+        "partner_id": sale_order.partner_id.id,
+        "sale_order_ids": [(6, 0, [sale_order.id])],
+        "reference": sale_order.name,
+        "state": "pending",
+    })
+    
+    # 3. Mark transaction as done
+    tx_sudo._set_done()
+    
+    # 4. Confirm sale order
+    if sale_order.state in ("draft", "sent"):
+        sale_order.action_confirm()
+```
+
+### Example: Handling Approved Payment
+
+```python
+# Bancard sends POST notification
+payment_data = {
+    "operation": {
+        "shop_process_id": 789456,
+        "response_description": "Transaccion aprobada",
+        "extended_response_description": "Payment approved by bank"
+    }
+}
+
+# Controller processes:
+# 1. Finds sale order by shop_process_id
+# 2. Creates payment transaction
+# 3. Confirms the order
+# 4. Returns "OK" to Bancard
+```
+
+---
+
+## bancard_return
+
+Handles user cancellation of payment process.
+
+### HTTP Route
+
+```python
+@http.route(
+    "/payment/bancard/return",
+    type="http",
+    auth="public",
+    website=True,
+    csrf=False,
+    methods=["GET", "POST"],
+)
+def bancard_return(self, **post):
+```
+
+<ParamField path="post" type="dict">
+  Keyword arguments containing request parameters
+</ParamField>
+
+### Response
+
+Redirects user to `/shop/cart` to resume shopping.
+
+### Usage
+
+This endpoint is called when:
+- User clicks "Cancel" on Bancard payment page
+- User navigates back during payment process
+- Payment session times out
+
+```python
+# User cancels payment on Bancard page
+# → Bancard redirects to /payment/bancard/return
+# → Controller redirects to /shop/cart
+```

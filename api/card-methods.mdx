@@ -1,0 +1,456 @@
+---
+title: 'Card Methods'
+description: 'API reference for NewCards and GetCards classes to manage stored payment cards'
+---
+
+## Overview
+
+The card management API provides two classes for handling stored payment cards in Bancard:
+
+- **NewCards**: Register new cards for users
+- **GetCards**: Retrieve existing cards for users
+
+Both classes handle secure token generation and API payload construction.
+
+---
+
+## NewCards Class
+
+Registers a new payment card for a user in the Bancard system.
+
+**Source**: `models/method_new_cards.py:9`
+
+### Constructor
+
+**Source**: `models/method_new_cards.py:11`
+
+<ParamField path="public_key" type="str" required>
+  Bancard public API key
+</ParamField>
+
+<ParamField path="private_key" type="str" required>
+  Bancard private API key (used for token generation)
+</ParamField>
+
+<ParamField path="base_url" type="str" required>
+  Base URL of the Odoo instance for webhook callbacks
+</ParamField>
+
+<ParamField path="card_id" type="str" required>
+  Unique identifier for the card being registered
+</ParamField>
+
+<ParamField path="user_id" type="str" required>
+  Unique identifier for the user
+</ParamField>
+
+```python
+from models.method_new_cards import NewCards
+
+method = NewCards(
+    public_key="pub_abc123def456",
+    private_key="priv_xyz789ghi012",
+    base_url="https://mystore.example.com",
+    card_id="card_12345",
+    user_id="user_67890",
+)
+```
+
+### new_cards()
+
+Generates the complete payload for registering a new card.
+
+**Source**: `models/method_new_cards.py:18`
+
+<ResponseField name="payload" type="dict">
+  Complete request payload ready to send to Bancard API
+</ResponseField>
+
+```python
+payload = method.new_cards()
+```
+
+**Payload Structure**:
+
+```python
+{
+    "public_key": self.public_key,
+    "operation": {
+        "token": "<md5_hash>",
+        "card_id": "card_12345",
+        "user_id": "user_67890",
+        "user_cell_phone": "12345678",
+        "user_mail": "example@mail.com",
+        "return_url": "https://mystore.example.com/payment/bancard/catastro/webhook",
+    },
+}
+```
+
+**Field Details**:
+
+<ResponseField name="public_key" type="str">
+  Public API key for authentication
+</ResponseField>
+
+<ResponseField name="operation.token" type="str">
+  MD5 hash generated from private key, card ID, user ID, and operation type
+</ResponseField>
+
+<ResponseField name="operation.card_id" type="str">
+  Unique identifier for the card
+</ResponseField>
+
+<ResponseField name="operation.user_id" type="str">
+  Unique identifier for the user
+</ResponseField>
+
+<ResponseField name="operation.user_cell_phone" type="str">
+  User's cell phone number (default: "12345678")
+</ResponseField>
+
+<ResponseField name="operation.user_mail" type="str">
+  User's email address (default: "example@mail.com")
+</ResponseField>
+
+<ResponseField name="operation.return_url" type="str">
+  Webhook URL where Bancard sends card registration results
+</ResponseField>
+
+**Returns**: Dictionary containing the complete payload
+
+### generate_md5_catastro()
+
+Generates the MD5 security token for card operations.
+
+**Source**: `models/method_new_cards.py:38`
+
+<ParamField path="private_key" type="str" required>
+  Bancard private API key
+</ParamField>
+
+<ParamField path="card_id" type="str" required>
+  Unique card identifier
+</ParamField>
+
+<ParamField path="user_id" type="str" required>
+  Unique user identifier
+</ParamField>
+
+<ParamField path="operation" type="str" required>
+  Operation type (e.g., "request_new_card")
+</ParamField>
+
+<ResponseField name="token" type="str">
+  32-character MD5 hexadecimal hash
+</ResponseField>
+
+```python
+token = method.generate_md5_catastro(
+    private_key="priv_xyz789ghi012",
+    card_id="card_12345",
+    user_id="user_67890",
+    operation="request_new_card"
+)
+```
+
+**Token Generation Algorithm**:
+
+1. Concatenate: `private_key + card_id + user_id + operation`
+2. Encode to bytes: `concatenated.encode()`
+3. Generate MD5 hash: `hashlib.md5(bytes).hexdigest()`
+
+**Implementation**:
+
+```python
+concatenated = f"{private_key}{card_id}{user_id}{operation}"
+token = hashlib.md5(concatenated.encode()).hexdigest()
+```
+
+**Returns**: MD5 hash string
+
+### API Endpoint
+
+The generated payload is sent to:
+
+```
+POST {environment}/vpos/api/0.3/cards/new
+```
+
+### Complete Usage Example
+
+```python
+from models.method_new_cards import NewCards
+import requests
+
+# Initialize the method
+method = NewCards(
+    public_key="pub_abc123def456",
+    private_key="priv_xyz789ghi012",
+    base_url="https://mystore.example.com",
+    card_id="card_54321",
+    user_id="user_98765",
+)
+
+# Generate payload
+payload = method.new_cards()
+
+# Send to Bancard API
+response = requests.post(
+    "https://vpos.infonet.com.py/vpos/api/0.3/cards/new",
+    json=payload
+)
+
+result = response.json()
+print(f"Process ID: {result.get('process_id')}")
+```
+
+---
+
+## GetCards Class
+
+Retrieves all stored payment cards for a specific user.
+
+**Source**: `models/method_get_card.py:9`
+
+### Constructor
+
+**Source**: `models/method_get_card.py:11`
+
+<ParamField path="public_key" type="str" required>
+  Bancard public API key
+</ParamField>
+
+<ParamField path="private_key" type="str" required>
+  Bancard private API key (used for token generation)
+</ParamField>
+
+<ParamField path="user_id" type="str" required>
+  Unique identifier for the user
+</ParamField>
+
+```python
+from models.method_get_card import GetCards
+
+method = GetCards(
+    public_key="pub_abc123def456",
+    private_key="priv_xyz789ghi012",
+    user_id="user_67890",
+)
+```
+
+### get_cards()
+
+Generates the complete payload for retrieving user cards.
+
+**Source**: `models/method_get_card.py:16`
+
+<ResponseField name="payload" type="dict">
+  Complete request payload ready to send to Bancard API
+</ResponseField>
+
+```python
+payload = method.get_cards()
+```
+
+**Payload Structure**:
+
+```python
+{
+    "public_key": self.public_key,
+    "operation": {
+        "token": "<md5_hash>",
+        "extra_response_attributes": ["cards.bancard_proccesed"],
+    },
+}
+```
+
+**Field Details**:
+
+<ResponseField name="public_key" type="str">
+  Public API key for authentication
+</ResponseField>
+
+<ResponseField name="operation.token" type="str">
+  MD5 hash generated from private key, user ID, and operation type
+</ResponseField>
+
+<ResponseField name="operation.extra_response_attributes" type="list">
+  Additional attributes to include in response (e.g., card processing status)
+</ResponseField>
+
+**Returns**: Dictionary containing the complete payload
+
+### generate_md5_get_cards()
+
+Generates the MD5 security token for retrieving cards.
+
+**Source**: `models/method_get_card.py:30`
+
+<ParamField path="private_key" type="str" required>
+  Bancard private API key
+</ParamField>
+
+<ParamField path="user_id" type="str" required>
+  Unique user identifier
+</ParamField>
+
+<ParamField path="operation" type="str" required>
+  Operation type ("request_user_cards")
+</ParamField>
+
+<ResponseField name="token" type="str">
+  32-character MD5 hexadecimal hash
+</ResponseField>
+
+```python
+token = method.generate_md5_get_cards(
+    private_key="priv_xyz789ghi012",
+    user_id="user_67890",
+    operation="request_user_cards"
+)
+```
+
+**Token Generation Algorithm**:
+
+1. Concatenate: `private_key + user_id + operation`
+2. Encode to bytes: `concatenated.encode()`
+3. Generate MD5 hash: `hashlib.md5(bytes).hexdigest()`
+
+**Implementation**:
+
+```python
+concatenated = f"{private_key}{user_id}{operation}"
+token = hashlib.md5(concatenated.encode()).hexdigest()
+```
+
+**Returns**: MD5 hash string
+
+### API Endpoint
+
+The generated payload is sent to:
+
+```
+GET {environment}/vpos/api/0.3/users/{user_id}/cards
+```
+
+### Complete Usage Example
+
+```python
+from models.method_get_card import GetCards
+import requests
+
+# Initialize the method
+method = GetCards(
+    public_key="pub_abc123def456",
+    private_key="priv_xyz789ghi012",
+    user_id="user_98765",
+)
+
+# Generate payload
+payload = method.get_cards()
+
+# Send to Bancard API
+response = requests.post(
+    f"https://vpos.infonet.com.py/vpos/api/0.3/users/user_98765/cards",
+    json=payload
+)
+
+result = response.json()
+cards = result.get("cards", [])
+for card in cards:
+    print(f"Card: {card}")
+```
+
+### Response Format
+
+The API returns a list of card objects:
+
+```python
+{
+    "status": "success",
+    "cards": [
+        {
+            "card_id": "card_12345",
+            "card_masked_number": "************1234",
+            "card_brand": "VISA",
+            "expiration_date": "12/25",
+            "bancard_proccesed": true
+        },
+        # ... more cards
+    ]
+}
+```
+
+---
+
+## Security Considerations
+
+### Token Generation
+
+All card operations require secure MD5 token generation:
+
+- **NewCards**: Uses `private_key + card_id + user_id + operation`
+- **GetCards**: Uses `private_key + user_id + operation`
+
+### Private Key Handling
+
+- Private keys are never sent in API requests
+- Private keys are only used for local token generation
+- Tokens must be regenerated for each request
+
+### User Identification
+
+- User IDs must be unique and persistent
+- Card IDs must be unique across the system
+- Both should be generated using secure sequences
+
+---
+
+## Integration Example
+
+Complete workflow for card management:
+
+```python
+from models.method_new_cards import NewCards
+from models.method_get_card import GetCards
+import requests
+
+base_url = "https://vpos.infonet.com.py"
+public_key = "pub_abc123"
+private_key = "priv_xyz789"
+user_id = "user_12345"
+
+# Step 1: Register a new card
+new_card = NewCards(
+    public_key=public_key,
+    private_key=private_key,
+    base_url="https://mystore.com",
+    card_id="card_001",
+    user_id=user_id,
+)
+
+payload = new_card.new_cards()
+response = requests.post(
+    f"{base_url}/vpos/api/0.3/cards/new",
+    json=payload
+)
+print(f"Card registration initiated: {response.json()}")
+
+# Step 2: Retrieve user's cards
+get_cards = GetCards(
+    public_key=public_key,
+    private_key=private_key,
+    user_id=user_id,
+)
+
+payload = get_cards.get_cards()
+response = requests.post(
+    f"{base_url}/vpos/api/0.3/users/{user_id}/cards",
+    json=payload
+)
+
+cards = response.json().get("cards", [])
+print(f"User has {len(cards)} stored cards")
+for card in cards:
+    print(f"  - {card['card_masked_number']} ({card['card_brand']})")
+```

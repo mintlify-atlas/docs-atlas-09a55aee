@@ -1,0 +1,160 @@
+---
+title: 'BancardUserCard Model'
+description: 'Model for storing and managing user payment cards in Bancard'
+---
+
+## Overview
+
+The `BancardUserCard` model stores tokenized payment card information for users. It enables secure card storage and retrieval for recurring payments without storing sensitive card details.
+
+## Model Definition
+
+```python
+from odoo import models, fields
+
+class BancardUserCard(models.Model):
+    _name = "bancard.user.card"
+    _description = "Tarjetas Bancard del Usuario"
+    _rec_name = "card_masked_number"
+```
+
+## Fields
+
+<ResponseField name="user_id" type="Many2one" required>
+  Reference to the user who owns this card.
+  
+  - **Model**: `res.users`
+  - **OnDelete**: `cascade` (card is deleted when user is deleted)
+  - **Required**: Yes
+</ResponseField>
+
+<ResponseField name="alias_token" type="Char" required>
+  Bancard-provided token that represents the stored card. This token is used for subsequent payments without requiring card details.
+  
+  - **Required**: Yes
+  - **Unique**: Yes (per user)
+</ResponseField>
+
+<ResponseField name="card_masked_number" type="Char">
+  Masked card number for display purposes (e.g., "****1234"). This is the record name field used for identifying cards in the UI.
+  
+  - **Required**: No
+</ResponseField>
+
+<ResponseField name="expiration_date" type="Char">
+  Card expiration date in string format. Used for display and validation purposes.
+  
+  - **Required**: No
+</ResponseField>
+
+<ResponseField name="card_brand" type="Char">
+  Card brand or type (e.g., "Visa", "Mastercard").
+  
+  - **Required**: No
+</ResponseField>
+
+<ResponseField name="card_id_bancard" type="Integer">
+  Bancard's internal card identifier for reference.
+  
+  - **Required**: No
+</ResponseField>
+
+<ResponseField name="card_type" type="Selection">
+  Indicates whether the card is credit or debit.
+  
+  - **Options**:
+    - `credit` - Crédito (Credit)
+    - `debit` - Débito (Debit)
+  - **Required**: No
+</ResponseField>
+
+<ResponseField name="bancard_proccesed" type="Boolean">
+  Flag indicating whether the card has been processed by Bancard.
+  
+  - **Default**: `False`
+  - **Required**: No
+</ResponseField>
+
+## Constraints
+
+### SQL Constraints
+
+```python
+_sql_constraints = [
+    (
+        "unique_alias_token_user",
+        "UNIQUE(alias_token, user_id)",
+        "Ya existe esta tarjeta registrada para el usuario.",
+    )
+]
+```
+
+The model enforces a unique constraint on the combination of `alias_token` and `user_id` to prevent duplicate card registrations for the same user.
+
+## Usage Examples
+
+### Creating a New Card Record
+
+```python
+card = request.env["bancard.user.card"].sudo().create({
+    "user_id": current_user.id,
+    "alias_token": "abc123xyz",
+    "card_masked_number": "****1234",
+    "expiration_date": "12/25",
+    "card_brand": "Visa",
+    "card_type": "credit",
+    "bancard_proccesed": True
+})
+```
+
+### Retrieving User Cards
+
+```python
+user_cards = request.env["bancard.user.card"].sudo().search([
+    ("user_id", "=", current_user.id)
+])
+
+for card in user_cards:
+    print(f"Card: {card.card_masked_number} - {card.card_brand}")
+```
+
+### Finding Card by Token
+
+```python
+card = request.env["bancard.user.card"].sudo().search([
+    ("alias_token", "=", token),
+    ("user_id", "=", user_id)
+], limit=1)
+```
+
+## Security Considerations
+
+<Warning>
+  This model stores tokenized card data only. Never store raw card numbers, CVV codes, or other sensitive payment information.
+</Warning>
+
+### Best Practices
+
+1. **Token Storage**: Only store the `alias_token` provided by Bancard. This token represents the card without exposing sensitive details.
+
+2. **User Isolation**: Always filter cards by `user_id` to ensure users can only access their own cards.
+
+3. **Cascade Deletion**: Cards are automatically deleted when the associated user is removed (`ondelete="cascade"`).
+
+4. **Duplicate Prevention**: The unique constraint on `alias_token` and `user_id` prevents accidental duplicate registrations.
+
+5. **Access Control**: Use `.sudo()` carefully and implement proper access rights to prevent unauthorized access to card data.
+
+## Related Models
+
+- [SaleOrder](/api/sale-order) - Extended sale order with Bancard payment fields
+- Payment Provider - Manages Bancard provider configuration
+- Payment Transaction - Tracks payment transactions
+
+## Integration Flow
+
+1. User enters card details in Bancard's secure payment form
+2. Bancard processes and tokenizes the card, returning an `alias_token`
+3. Your application creates a `BancardUserCard` record with the token
+4. For future payments, use the stored `alias_token` to charge the card
+5. Display the `card_masked_number` to help users identify their saved cards
